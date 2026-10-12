@@ -4,35 +4,73 @@
 #include "gdt.h"
 #include "vga.h"
 #include "printf.h"
-#include "usermode.h"
+#include "kbd_buffer.h"
+#include "process.h"
 
-/* Обработчик int 0x80. Регистры: eax = номер, ebx/ecx/edx — аргументы. */
 void syscall_handler(registers_t* regs) {
     u32 nr = regs->eax;
 
     switch (nr) {
         case SYS_EXIT: {
-            /* Аргумент: код возврата (игнорируем). */
-            usermode_return_to_kernel();
-            /* Не вернёмся. */
+            u32 code = regs->ebx;
+            if (current) {
+                current->exit_code = code;
+                printf("[syscall] pid %u exit(%u)\n", current->pid, code);
+                current->state = PROC_ZOMBIE;
+            }
+            for (;;) {
+                schedule();
+                __asm__ volatile ("hlt");
+            }
             break;
         }
         case SYS_WRITE: {
-            /* write(fd, buf, len)
-             *   ebx = fd (пока только 1 = stdout)
-             *   ecx = user pointer
-             *   edx = length
-             */
-            u32 fd  = regs->ebx;
+            u32         fd  = regs->ebx;
             const char* buf = (const char*) regs->ecx;
-            u32 len = regs->edx;
-
-            if (fd == 1 && buf) {
-                for (u32 i = 0; i < len; i++) {
-                    vga_putchar(buf[i]);
+            u32         len = regs->edx;
+            if (fd == 1 || fd == 2) {
+                if (buf) {
+                    for (u32 i = 0; i < len; i++) vga_putchar(buf[i]);
                 }
+                regs->eax = len;
+            } else {
+                regs->eax = (u32)-1;
             }
-            regs->eax = len;
+            break;
+        }
+        case SYS_READ: {
+            u32   fd  = regs->ebx;
+            char* buf = (char*) regs->ecx;
+            u32   len = regs->edx;
+            if (fd == 0 && buf && len > 0) {
+                u32 i = 0;
+                while (i < len) {
+                    int c = kbd_buffer_pop();
+                    if (c < 0) {
+                        /* Разрешить прерывания — иначе hlt зависнет. */
+                        __asm__ volatile ("sti");
+                        yield();
+                        __asm__ volatile ("hlt");
+                        __asm__ volatile ("cli");
+                        continue;
+                    }
+                    buf[i++] = (char) c;
+                    //vga_putchar((char) c);
+                    if (c == '\n') break;
+                }
+                regs->eax = i;
+            } else {
+                regs->eax = (u32)-1;
+            }
+            break;
+        }
+        case SYS_GETPID: {
+            regs->eax = current ? current->pid : 0;
+            break;
+        }
+        case SYS_BRK: {
+            (void) regs->ebx;
+            regs->eax = 0x08000000;
             break;
         }
         default:
@@ -43,7 +81,6 @@ void syscall_handler(registers_t* regs) {
 }
 
 void syscall_init(void) {
-    /* Вектор 0x80, DPL=3 — чтобы вызывать из ring 3. */
     extern void syscall_stub(void);
     idt_set_gate(0x80, (u32) syscall_stub, GDT_KERNEL_CODE,
                  IDT_INT_GATE_RING3);

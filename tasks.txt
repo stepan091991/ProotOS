@@ -1,63 +1,16 @@
-1. Paging (identity map)           ← сейчас
-2. Page Fault handler
-3. VMM API
-4. kheap через VMM                 ← убирает костыль непрерывности
-5. ATA PIO драйвер                 ← независимо от paging!
-6. FAT32 read-only
-7. ELF32 парсер + загрузчик
-8. Запуск программы в ring 0       ← ПЕРВЫЙ БОЛЬШОЙ MILESTONE
-9. TSS
-10. Ring 3                         ← ВТОРОЙ MILESTONE
-11. Syscalls (exit, write, read)
-12. Process structure
-13. Scheduler
-14. fork/exec/wait
-15. Init + user shell              ← ФИНАЛ
-
-🎯 Следующий шаг: процессы + планировщик
-
-Это большой кусок, но он разбивается на три части. Предлагаю такой порядок:
-Часть 1: Процессы ядра (kernel threads) — упрощённая версия
-
-    PCB: pid, state, esp, stack, pd (page directory)
-
-    Создание процесса как функции ядра
-
-    Round-robin по тику PIT (100 Гц)
-
-    Переключение контекста на ассемблере
-
-    Никаких fork — просто spawn(fn)
-
-Результат: два ядерных «потока» сменяют друг друга, каждый печатает свой счётчик. Вы видите многозадачность.
-Часть 2: User-процессы
-
-    Каждый процесс имеет свой address space (свой CR3)
-
-    Загрузка ELF в новый address space при создании
-
-    Переключение CR3 в switch_to
-
-    syscall_exit завершает процесс, освобождает ресурсы
-
-Результат: можно запускать несколько user-программ одновременно.
-Часть 3: fork / exec / wait
-
-    fork — копирование address space (copy-on-write или полное)
-
-    exec — замена образа
-
-    wait — ожидание потомка
-
-    Zombie-процессы
-
-Результат: Unix-подобная модель.
-Часть 4: Init + user shell
-
-    Ядро грузит /INIT.ELF при старте
-
-    Init запускает user-space shell
-
-    Shell умеет spawn другие программы
-
-Результат: финал roadmap — вы в своей ОС, с настоящим shell'ом.
+📊 Чек-лист для отслеживания прогресса
+□ Фаза 0: Инфраструктура
+□ Работающий кросс-компилятор i686-elf-gcc.
+□ Установленные git, make, python3 на хосте.
+□ Фаза 1: Порт
+□ Создана директория ports/prootos на основе ports/minimal.
+□ Адаптирован mphalport.c для вывода, ввода и времени.
+□ Настроен mpconfigport.h для минимальной сборки.
+□ Фаза 2: Syscalls в ядре
+□ Реализованы SYS_WRITE и SYS_READ.
+□ Реализованы SYS_EXIT и SYS_BRK.
+□ (Опционально) Реализованы SYS_OPEN, SYS_CLOSE, SYS_LSEEK.
+□ Фаза 3: Сборка и запуск
+□ Успешно собран mpy-cross.
+□ Успешно собран micropython.elf для ProotOS.
+□ exec /micropython.elf запускает REPL.

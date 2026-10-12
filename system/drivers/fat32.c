@@ -835,3 +835,27 @@ static int find_in_dir_pos(u32 dir_cluster, const char* name,
                                printf("  walking filesystem:\n");
                                test_walk("/", 0);
                            }
+
+int fat32_seek(fat32_file_t* f, u32 offset) {
+    if (!f->is_open) return 0;
+    if (offset > f->size) return 0;
+
+    f->current_cluster = f->start_cluster;
+    f->current_offset  = 0;
+    f->position        = 0;
+
+    while (offset > 0) {
+        u32 in_cluster = fs.cluster_size - f->current_offset;
+        if (offset < in_cluster) {
+            f->current_offset += offset;
+            f->position       += offset;
+            return 1;
+        }
+        offset -= in_cluster;
+        f->position += in_cluster;
+        f->current_cluster = next_cluster(f->current_cluster);
+        f->current_offset  = 0;
+        if (f->current_cluster == 0) return 0;
+    }
+    return 1;
+}

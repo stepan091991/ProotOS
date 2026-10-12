@@ -55,7 +55,7 @@ static void work1_thread(void* arg) {
     (void) arg;
     for (;;) {
         g_work1_count++;
-        yield();              /* добровольно отдать CPU */
+        process_sleep(500);   /* раз в 500 мс */
     }
 }
 
@@ -63,7 +63,7 @@ static void work2_thread(void* arg) {
     (void) arg;
     for (;;) {
         g_work2_count++;
-        yield();
+        process_sleep(700);   /* раз в 700 мс */
     }
 }
 

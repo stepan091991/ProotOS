@@ -61,4 +61,6 @@ int  fat32_mkdir(const char* path);
 /* Записать файл целиком (создаёт или перезаписывает). */
 int  fat32_write_file(const char* path, const void* data, u32 size);
 
+int  fat32_seek(fat32_file_t* file, u32 offset);
+
 #endif
