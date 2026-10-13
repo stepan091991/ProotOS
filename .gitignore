@@ -1,0 +1,4 @@
+build/
+iso/
+*.img
+serial.log

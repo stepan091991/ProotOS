@@ -1,0 +1,16 @@
+📊 Чек-лист для отслеживания прогресса
+□ Фаза 0: Инфраструктура
+□ Работающий кросс-компилятор i686-elf-gcc.
+□ Установленные git, make, python3 на хосте.
+□ Фаза 1: Порт
+□ Создана директория ports/prootos на основе ports/minimal.
+□ Адаптирован mphalport.c для вывода, ввода и времени.
+□ Настроен mpconfigport.h для минимальной сборки.
+□ Фаза 2: Syscalls в ядре
+□ Реализованы SYS_WRITE и SYS_READ.
+□ Реализованы SYS_EXIT и SYS_BRK.
+□ (Опционально) Реализованы SYS_OPEN, SYS_CLOSE, SYS_LSEEK.
+□ Фаза 3: Сборка и запуск
+□ Успешно собран mpy-cross.
+□ Успешно собран micropython.elf для ProotOS.
+□ exec /micropython.elf запускает REPL.
