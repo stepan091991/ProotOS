@@ -25,7 +25,6 @@
 #include "tss.h"
 #include "syscall.h"
 #include "pci.h"
-#include "usb.h"
 #include "process.h"
 
 static void print_banner(void) {
@@ -107,7 +106,6 @@ void kmain(u32 multiboot_info_addr) {
     pci_init();
     pci_dump();
 
-    //usb_init_and_mount();
 
     block_device_t* mounted = bdev_get("usb0");
     if (!mounted) {

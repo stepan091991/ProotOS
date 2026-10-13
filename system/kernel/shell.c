@@ -14,8 +14,6 @@
 #include "blockdev.h"
 #include "fat32.h"
 #include "banner.h"
-#include "usb.h"
-#include "usb_hid.h"
 #include "process.h"
 
 #define PROMPT        "prootos> "
@@ -200,7 +198,6 @@ static u32 read_line(char* out, u32 max) {
     for (;;) {
         int c = kbd_buffer_pop();
         if (c < 0) {
-            usb_hid_poll();
             c = kbd_buffer_pop();
             if (c < 0) {
                 yield();
@@ -352,7 +349,6 @@ static void cmd_help(void) {
     printf("  write FILE TEXT     - create/overwrite FILE with TEXT\n");
     printf("  pager [N|off]       - set page size, or disable\n");
     printf("  pci                 - list PCI devices\n");
-    printf("  usb                 - dump UHCI state\n");
     printf("  --- processes ---\n");
     printf("  ps / threads        - list processes\n");
     printf("  sleep MS            - sleep N milliseconds\n");
@@ -685,9 +681,6 @@ static void execute(const char* line) {
     } else if (strcmp(cmd, "vmm") == 0) {
         if (*args == '\0') printf("usage: vmm <hex-address>\n");
         else              vmm_dump(parse_hex(args));
-    } else if (strcmp(cmd, "usb") == 0) {
-        uhci_dump();
-        usb_msd_dump();
     } else if (strcmp(cmd, "pci") == 0) {
         pci_dump();
     }else if (strcmp(cmd, "exec") == 0) {
