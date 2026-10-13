@@ -10,7 +10,8 @@ QEMU     = qemu-system-$(ARCH)
 ASMFLAGS = -f elf32
 CFLAGS   = -m32 -ffreestanding -O2 -Wall -Wextra \
            -fno-stack-protector -fno-pic \
-           -I system/include -I system/drivers -I system/utils
+           -I system/include -I system/drivers -I system/utils \
+           -I system/drivers/vga/
 LDFLAGS  = -m elf_i386 -T system/kernel/linker.ld
 
 BUILD_DIR = build
