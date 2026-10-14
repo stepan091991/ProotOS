@@ -61,7 +61,7 @@ u32 process_create(const char* name, void (*fn)(void*), void* arg) {
     strncpy(p->name, name, PROCESS_NAME_MAX - 1);
     p->kstack     = (u32) stack;
     p->kstack_top = (u32)(stack + KERNEL_STACK_SIZE);
-    p->cr3        = vmm_get_current_pd();   /* kernel PD */
+    p->cr3        = vmm_get_current_pd();
     p->is_user    = 0;
 
     u32* sp = (u32*) p->kstack_top;
@@ -91,240 +91,277 @@ u32 process_create(const char* name, void (*fn)(void*), void* arg) {
     return p->pid;
 }
 
-/* ─── User-процесс ───────────────────────────────── */
+/* ─── Построение argc/argv на user-стеке ─────────── */
 
-u32 process_create_user(const char* name, const char* path) {
-    process_t* p = alloc_slot();
-    if (!p) { printf("[proc] no free slot\n"); return 0; }
+static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
+                            int argc, char** argv) {
+    u32 vp = ustack_virt + USER_STACK_SIZE;
+    u32 pp = ustack_phys + USER_STACK_SIZE;
+    u32 argv_user[16];
+    int i;
 
-    /* 1. Создать новое адресное пространство. */
-    u32 old_cr3 = vmm_get_current_pd();
-    u32 new_pd  = vmm_create_address_space();
-    if (!new_pd) { printf("[proc] cannot create AS\n"); return 0; }
+    if (argc < 0)  argc = 0;
+    if (argc > 16) argc = 16;
 
-    /* 2. Переключиться на новое AS, загрузить ELF. */
-    vmm_switch_address_space(new_pd);
-
-    elf_entry_t entry = elf_load(path);
-    if (!entry) {
-        printf("[proc] elf_load failed: %s\n", path);
-        vmm_switch_address_space(old_cr3);
-        return 0;
+    for (i = argc - 1; i >= 0; i--) {
+        u32 len = (u32) strlen(argv[i]) + 1;
+        vp -= len; pp -= len;
+        memcpy((void*) pp, argv[i], len);
+        argv_user[i] = vp;
     }
 
-    /* 3. Выделить user stack (одна страница). */
-    u32 ustack_phys = (u32) pmm_alloc_page();
-    if (!ustack_phys) {
-        printf("[proc] OOM user stack\n");
-        vmm_switch_address_space(old_cr3);
-        return 0;
-    }
-    memset((void*) ustack_phys, 0, USER_STACK_SIZE);
+    while (pp & 3) { pp--; vp--; }
 
-    u32 ustack_virt = 0xB0000000;
-    vmm_map(ustack_virt, ustack_phys, PAGE_RW | PAGE_USER);
+    pp -= 4; vp -= 4;
+    *(u32*) pp = 0;
 
-    /* Вернуться на старое AS. */
-    vmm_switch_address_space(old_cr3);
-
-    /* 4. Выделить kernel stack. */
-    u8* kstack = (u8*) kmalloc(KERNEL_STACK_SIZE);
-    if (!kstack) {
-        printf("[proc] OOM kstack\n");
-        return 0;
+    for (i = argc - 1; i >= 0; i--) {
+        pp -= 4; vp -= 4;
+        *(u32*) pp = argv_user[i];
     }
 
-    memset(p, 0, sizeof(*p));
-    p->pid        = next_pid++;
-    p->state      = PROC_READY;
-    strncpy(p->name, name, PROCESS_NAME_MAX - 1);
-    p->kstack     = (u32) kstack;
-    p->kstack_top = (u32)(kstack + KERNEL_STACK_SIZE);
-    p->cr3        = new_pd;
-    p->user_entry = (u32) entry;
-    p->user_stack = ustack_virt + USER_STACK_SIZE - 16;
-    p->is_user    = 1;
+    pp -= 4; vp -= 4;
+    *(u32*) pp = (u32) argc;
 
-    /* 5. Подготовить kernel stack для первого switch_to.
-     *
-     * Последовательность: switch_to снимает pusha-регистры и сегменты,
-     * делает ret на user_entry, тот делает iret в ring 3. */
+    return vp;
+                            }
 
-    u32* sp = (u32*) p->kstack_top;
+                            /* ─── User-процесс ───────────────────────────────── */
 
-    /* Данные для iret (снизу вверх). */
-    *--sp = 0x23;                   /* ss_user */
-    *--sp = p->user_stack;          /* user_esp */
-    *--sp = 0x202;                  /* eflags (IF=1) */
-    *--sp = 0x1B;                   /* cs_user */
-    *--sp = p->user_entry;          /* user_eip */
+                            u32 process_create_user(const char* name, const char* path,
+                                                    int argc, char** argv) {
+                                process_t* p = alloc_slot();
+                                if (!p) { printf("[proc] no free slot\n"); return 0; }
 
-    /* eip для ret в switch_to. */
-    *--sp = (u32) user_entry;
+                                u32 old_cr3 = vmm_get_current_pd();
+                                u32 new_pd  = vmm_create_address_space();
+                                if (!new_pd) { printf("[proc] cannot create AS\n"); return 0; }
 
-    /* pusha — edi..eax. */
-    *--sp = 0;   /* edi */
-    *--sp = 0;   /* esi */
-    *--sp = 0;   /* ebp */
-    *--sp = 0;   /* esp_dummy */
-    *--sp = 0;   /* ebx */
-    *--sp = 0;   /* edx */
-    *--sp = 0;   /* ecx */
-    *--sp = 0;   /* eax */
+                                vmm_switch_address_space(new_pd);
 
-    /* Сегменты — ds, es, fs, gs. */
-    *--sp = 0x10;   /* gs */
-    *--sp = 0x10;   /* fs */
-    *--sp = 0x10;   /* es */
-    *--sp = 0x10;   /* ds */
+                                elf_entry_t entry = elf_load(path);
+                                if (!entry) {
+                                    printf("[proc] elf_load failed: %s\n", path);
+                                    vmm_switch_address_space(old_cr3);
+                                    return 0;
+                                }
 
-    p->esp = (u32) sp;
+                                u32 ustack_phys = (u32) pmm_alloc_page();
+                                if (!ustack_phys) {
+                                    printf("[proc] OOM user stack\n");
+                                    vmm_switch_address_space(old_cr3);
+                                    return 0;
+                                }
+                                memset((void*) ustack_phys, 0, USER_STACK_SIZE);
 
-    printf("[proc] created '%s' pid=%u esp=0x%08x (user, entry=0x%08x)\n",
-           p->name, p->pid, p->esp, p->user_entry);
-    return p->pid;
-}
+                                u32 ustack_virt = 0xB0000000;
+                                vmm_map(ustack_virt, ustack_phys, PAGE_RW | PAGE_USER);
 
-/* ─── Планировщик ────────────────────────────────── */
+                                u32 user_esp = build_user_stack(ustack_virt, ustack_phys, argc, argv);
 
-static process_t* pick_next(void) {
-    int start = 0;
-    if (current) {
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            if (&processes[i] == current) { start = i; break; }
-        }
-    }
-    for (int i = 1; i <= MAX_PROCESSES; i++) {
-        int idx = (start + i) % MAX_PROCESSES;
-        if (processes[idx].state == PROC_READY) return &processes[idx];
-    }
-    return NULL;
-}
+                                vmm_switch_address_space(old_cr3);
 
-void scheduler_tick(void) {
-    u64 now = pit_get_ticks();
+                                u8* kstack = (u8*) kmalloc(KERNEL_STACK_SIZE);
+                                if (!kstack) {
+                                    printf("[proc] OOM kstack\n");
+                                    return 0;
+                                }
 
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i].state == PROC_SLEEPING &&
-            processes[i].wake_tick <= now) {
-            processes[i].state = PROC_READY;
-            processes[i].wake_tick = 0;
-        }
-    }
+                                memset(p, 0, sizeof(*p));
+                                p->pid        = next_pid++;
+                                p->state      = PROC_READY;
+                                strncpy(p->name, name, PROCESS_NAME_MAX - 1);
+                                p->kstack     = (u32) kstack;
+                                p->kstack_top = (u32)(kstack + KERNEL_STACK_SIZE);
+                                p->cr3        = new_pd;
+                                p->user_entry = (u32) entry;
+                                p->user_stack = user_esp;
+                                p->is_user    = 1;
 
-    if (!current) return;
-    if (quantum_left > 0) { quantum_left--; return; }
-    quantum_left = SCHED_QUANTUM;
-    need_resched = 1;
-}
+                                u32* sp = (u32*) p->kstack_top;
 
-void schedule(void) {
-    __asm__ volatile ("cli");
+                                *--sp = 0x23;                   /* ss_user */
+                                *--sp = p->user_stack;          /* user_esp */
+                                *--sp = 0x202;                  /* eflags */
+                                *--sp = 0x1B;                   /* cs_user */
+                                *--sp = p->user_entry;          /* user_eip */
 
-    process_t* next = pick_next();
-    if (!next) {
-        __asm__ volatile ("sti");
-        return;
-    }
+                                *--sp = (u32) user_entry;       /* eip для ret в switch_to */
 
-    next->state = PROC_RUNNING;
-    if (current && current->state == PROC_RUNNING) current->state = PROC_READY;
+                                *--sp = 0;   /* edi */
+                                *--sp = 0;   /* esi */
+                                *--sp = 0;   /* ebp */
+                                *--sp = 0;   /* esp_dummy */
+                                *--sp = 0;   /* ebx */
+                                *--sp = 0;   /* edx */
+                                *--sp = 0;   /* ecx */
+                                *--sp = 0;   /* eax */
 
-    /* Обновить TSS.esp0 для следующего процесса. */
-    tss_set_kernel_stack(next->kstack_top);
+                                *--sp = 0x10;   /* gs */
+                                *--sp = 0x10;   /* fs */
+                                *--sp = 0x10;   /* es */
+                                *--sp = 0x10;   /* ds */
 
-    switch_to(next);
-    __asm__ volatile ("sti");
-}
+                                p->esp = (u32) sp;
 
-/* ─── Примитивы ──────────────────────────────────── */
+                                printf("[proc] created '%s' pid=%u esp=0x%08x (user, entry=0x%08x)\n",
+                                       p->name, p->pid, p->esp, p->user_entry);
+                                return p->pid;
+                                                    }
 
-void process_sleep(u32 ms) {
-    process_t* self = current;
-    if (!self) return;
-    if (ms == 0) { yield(); return; }
+                                                    /* ─── Планировщик ────────────────────────────────── */
 
-    u64 ticks_needed = (ms + 9) / 10;
-    if (ticks_needed == 0) ticks_needed = 1;
+                                                    static process_t* pick_next(void) {
+                                                        int start = 0;
+                                                        if (current) {
+                                                            for (int i = 0; i < MAX_PROCESSES; i++) {
+                                                                if (&processes[i] == current) { start = i; break; }
+                                                            }
+                                                        }
+                                                        for (int i = 1; i <= MAX_PROCESSES; i++) {
+                                                            int idx = (start + i) % MAX_PROCESSES;
+                                                            if (processes[idx].state == PROC_READY) return &processes[idx];
+                                                        }
+                                                        return NULL;
+                                                    }
 
-    self->wake_tick = (u32)(pit_get_ticks() + ticks_needed);
-    self->state     = PROC_SLEEPING;
+                                                    void scheduler_tick(void) {
+                                                        u64 now = pit_get_ticks();
 
-    schedule();
-}
+                                                        for (int i = 0; i < MAX_PROCESSES; i++) {
+                                                            if (processes[i].state == PROC_SLEEPING &&
+                                                                processes[i].wake_tick <= now) {
+                                                                processes[i].state = PROC_READY;
+                                                            processes[i].wake_tick = 0;
+                                                                }
+                                                        }
 
-int process_wait(u32 pid) {
-    if (pid == 0) {
-        printf("wait: usage: wait <pid>\n");
-        return -1;
-    }
+                                                        if (!current) return;
+                                                        if (quantum_left > 0) { quantum_left--; return; }
+                                                        quantum_left = SCHED_QUANTUM;
+                                                        need_resched = 1;
+                                                    }
 
-    while (1) {
-        process_t* p = process_find(pid);
-        if (!p) return -1;
+                                                    void schedule(void) {
+                                                        __asm__ volatile ("cli");
 
-        if (p == current) {
-            printf("wait: cannot wait for self\n");
-            return -1;
-        }
+                                                        process_t* next = pick_next();
+                                                        if (!next) {
+                                                            __asm__ volatile ("sti");
+                                                            return;
+                                                        }
 
-        if (p->state == PROC_ZOMBIE) {
-            if (p->kstack) {
-                kfree((void*) p->kstack);
-                p->kstack = 0;
-            }
-            p->state = PROC_UNUSED;
-            p->pid   = 0;
-            p->name[0] = '\0';
-            return 0;
-        }
+                                                        next->state = PROC_RUNNING;
+                                                        if (current && current->state == PROC_RUNNING) current->state = PROC_READY;
 
-        process_sleep(10);
-    }
-}
+                                                        tss_set_kernel_stack(next->kstack_top);
 
-int process_kill(u32 pid) {
-    process_t* p = process_find(pid);
-    if (!p) return -1;
-    if (p->state == PROC_ZOMBIE || p->state == PROC_UNUSED) return -1;
+                                                        switch_to(next);
+                                                        __asm__ volatile ("sti");
+                                                    }
 
-    p->state = PROC_ZOMBIE;
+                                                    void yield(void) {
+                                                        if (current && current->state == PROC_RUNNING) {
+                                                            current->state = PROC_READY;
+                                                        }
+                                                        schedule();
+                                                    }
 
-    if (p == current) {
-        for (;;) {
-            schedule();
-            __asm__ volatile ("hlt");
-        }
-    }
-    return 0;
-}
+                                                    /* ─── Примитивы ──────────────────────────────────── */
 
-void process_exit(void) {
-    if (!current) panic("process_exit without current");
+                                                    void process_sleep(u32 ms) {
+                                                        process_t* self = current;
+                                                        if (!self) return;
+                                                        if (ms == 0) { yield(); return; }
 
-    printf("[proc] pid=%u '%s' exiting\n", current->pid, current->name);
-    current->state = PROC_ZOMBIE;
+                                                        u64 ticks_needed = (ms + 9) / 10;
+                                                        if (ticks_needed == 0) ticks_needed = 1;
 
-    for (;;) {
-        schedule();
-        __asm__ volatile ("hlt");
-    }
-}
+                                                        self->wake_tick = (u32)(pit_get_ticks() + ticks_needed);
+                                                        self->state     = PROC_SLEEPING;
 
-void process_dump(void) {
-    printf("[proc] PID  STATE     NAME\n");
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i].state == PROC_UNUSED) continue;
-        const char* st = "?";
-        switch (processes[i].state) {
-            case PROC_RUNNING:  st = "RUNNING";  break;
-            case PROC_READY:    st = "READY";    break;
-            case PROC_SLEEPING: st = "SLEEPING"; break;
-            case PROC_ZOMBIE:   st = "ZOMBIE";   break;
-            default: break;
-        }
-        printf("       %-4u %-9s %s%s\n",
-               processes[i].pid, st, processes[i].name,
-               processes[i].is_user ? "  [user]" : "");
-    }
-}
+                                                        schedule();
+                                                    }
+
+                                                    int process_wait(u32 pid) {
+                                                        if (pid == 0) {
+                                                            printf("wait: usage: wait <pid>\n");
+                                                            return -1;
+                                                        }
+
+                                                        while (1) {
+                                                            process_t* p = process_find(pid);
+                                                            if (!p) return -1;
+
+                                                            if (p == current) {
+                                                                printf("wait: cannot wait for self\n");
+                                                                return -1;
+                                                            }
+
+                                                            if (p->state == PROC_ZOMBIE) {
+                                                                /* Закрыть оставшиеся fd. */
+                                                                for (int i = 3; i < MAX_FDS; i++) {
+                                                                    if (p->fd_open[i]) {
+                                                                        fat32_close(&p->fds[i]);
+                                                                        p->fd_open[i] = 0;
+                                                                    }
+                                                                }
+                                                                if (p->kstack) {
+                                                                    kfree((void*) p->kstack);
+                                                                    p->kstack = 0;
+                                                                }
+                                                                p->state = PROC_UNUSED;
+                                                                p->pid   = 0;
+                                                                p->name[0] = '\0';
+                                                                return 0;
+                                                            }
+
+                                                            process_sleep(10);
+                                                        }
+                                                    }
+
+                                                    int process_kill(u32 pid) {
+                                                        process_t* p = process_find(pid);
+                                                        if (!p) return -1;
+                                                        if (p->state == PROC_ZOMBIE || p->state == PROC_UNUSED) return -1;
+
+                                                        p->state = PROC_ZOMBIE;
+
+                                                        if (p == current) {
+                                                            for (;;) {
+                                                                schedule();
+                                                                __asm__ volatile ("hlt");
+                                                            }
+                                                        }
+                                                        return 0;
+                                                    }
+
+                                                    void process_exit(void) {
+                                                        if (!current) panic("process_exit without current");
+
+                                                        printf("[proc] pid=%u '%s' exiting\n", current->pid, current->name);
+                                                        current->state = PROC_ZOMBIE;
+
+                                                        for (;;) {
+                                                            schedule();
+                                                            __asm__ volatile ("hlt");
+                                                        }
+                                                    }
+
+                                                    void process_dump(void) {
+                                                        printf("[proc] PID  STATE     NAME\n");
+                                                        for (int i = 0; i < MAX_PROCESSES; i++) {
+                                                            if (processes[i].state == PROC_UNUSED) continue;
+                                                            const char* st = "?";
+                                                            switch (processes[i].state) {
+                                                                case PROC_RUNNING:  st = "RUNNING";  break;
+                                                                case PROC_READY:    st = "READY";    break;
+                                                                case PROC_SLEEPING: st = "SLEEPING"; break;
+                                                                case PROC_ZOMBIE:   st = "ZOMBIE";   break;
+                                                                default: break;
+                                                            }
+                                                            printf("       %-4u %-9s %s%s\n",
+                                                                   processes[i].pid, st, processes[i].name,
+                                                                   processes[i].is_user ? "  [user]" : "");
+                                                        }
+                                                    }

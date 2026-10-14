@@ -6,6 +6,7 @@
 #include "printf.h"
 #include "kbd_buffer.h"
 #include "process.h"
+#include "fat32.h"
 
 void syscall_handler(registers_t* regs) {
     u32 nr = regs->eax;
@@ -44,20 +45,54 @@ void syscall_handler(registers_t* regs) {
             u32   fd  = regs->ebx;
             char* buf = (char*) regs->ecx;
             u32   len = regs->edx;
-            if (fd == 0 && buf && len > 0) {
+
+            if (!buf || len == 0) {
+                regs->eax = (u32)-1;
+                break;
+            }
+
+            if (fd == 0) {
                 u32 i = 0;
                 while (i < len) {
                     int c = kbd_buffer_pop();
-                    if (c < 0) {
-                        /* Пока неблокирующий режим: возвращаем то, что есть.
-                         * Юзер крутится в busy-loop, таймер сам делает schedule. */
-                        regs->eax = i;
-                        return;
-                    }
+                    if (c < 0) { regs->eax = i; return; }
                     buf[i++] = (char) c;
                     if (c == '\n') break;
                 }
                 regs->eax = i;
+            } else if (current && fd >= 3 && fd < MAX_FDS &&
+                current->fd_open[fd]) {
+                u32 n = fat32_read(&current->fds[fd], buf, len);
+            regs->eax = n;
+                } else {
+                    regs->eax = (u32)-1;
+                }
+                break;
+        }
+
+        case SYS_OPEN: {
+            const char* path = (const char*) regs->ebx;
+            if (!path || !current) { regs->eax = (u32)-1; break; }
+
+            regs->eax = (u32)-1;
+            for (int i = 3; i < MAX_FDS; i++) {
+                if (!current->fd_open[i]) {
+                    if (fat32_open(path, &current->fds[i])) {
+                        current->fd_open[i] = 1;
+                        regs->eax = (u32) i;
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+
+        case SYS_CLOSE: {
+            u32 fd = regs->ebx;
+            if (current && fd >= 3 && fd < MAX_FDS && current->fd_open[fd]) {
+                fat32_close(&current->fds[fd]);
+                current->fd_open[fd] = 0;
+                regs->eax = 0;
             } else {
                 regs->eax = (u32)-1;
             }

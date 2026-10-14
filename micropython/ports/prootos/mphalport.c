@@ -6,10 +6,14 @@
 
 size_t strlen(const char *s);
 
-/* ─── Сырой syscall через int 0x80 ─────────────────
- * Сохраняем ebx/esi/edi явно — GCC с -O2 их использует,
- * и без push/pop наши аргументы затираются. */
+#define SYS_EXIT    0
+#define SYS_WRITE   1
+#define SYS_READ    2
+#define SYS_OPEN    3
+#define SYS_CLOSE   4
 
+/* Сырой syscall через int 0x80.
+ * Регистры фиксируем constraint'ами — GCC сам разложит по eax/ebx/ecx/edx. */
 int sys3(int nr, int a, int b, int c) {
     int ret;
     __asm__ volatile (
@@ -22,15 +26,23 @@ int sys3(int nr, int a, int b, int c) {
 }
 
 int sys_write(int fd, const void* buf, unsigned int len) {
-    return sys3(1, fd, (int)(size_t) buf, (int) len);
+    return sys3(SYS_WRITE, fd, (int)(size_t) buf, (int) len);
 }
 
 int sys_read(int fd, void* buf, unsigned int len) {
-    return sys3(2, fd, (int)(size_t) buf, (int) len);
+    return sys3(SYS_READ, fd, (int)(size_t) buf, (int) len);
+}
+
+int sys_open(const char* path, int flags) {
+    return sys3(SYS_OPEN, (int)(size_t) path, flags, 0);
+}
+
+int sys_close(int fd) {
+    return sys3(SYS_CLOSE, fd, 0, 0);
 }
 
 void sys_exit(int code) {
-    sys3(0, code, 0, 0);
+    sys3(SYS_EXIT, code, 0, 0);
     for (;;) { }
 }
 
