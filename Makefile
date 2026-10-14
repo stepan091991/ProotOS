@@ -39,10 +39,12 @@ USB_IMG      = $(BUILD_DIR)/usb.img
 USB_SIZE     = 64
 
 USER_PROG    = programs/hello.elf
+BIN_DIR      = initrd_files/BIN
 
-.PHONY: all clean run debug programs usb
+.PHONY: all clean run debug programs usb flash flash-iso flash-disk flash-list bin-all
 
-all: $(ISO_IMAGE) $(DISK_IMG) $(USB_IMG)
+# all зависит от bin-all — чтобы ELF-ы из programs/ попали в initrd_files/BIN/
+all: bin-all $(ISO_IMAGE) $(DISK_IMG) $(USB_IMG)
 
 # ─── Компиляция ядра ─────────────────────────────────
 $(BUILD_DIR)/%.o: system/%.S
@@ -56,11 +58,24 @@ $(BUILD_DIR)/%.o: system/%.c
 $(KERNEL_ELF): $(OBJECTS) system/kernel/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 
-# ─── Пользовательская программа ──────────────────────
+# ─── Пользовательские программы ──────────────────────
 programs: $(USER_PROG)
 
 $(USER_PROG):
 	$(MAKE) -C programs
+
+# Копирует все programs/*.elf в initrd_files/BIN/ в верхнем регистре,
+# с расширением .ELF (для совместимости с FAT32 8.3).
+bin-all:
+	@$(MAKE) --no-print-directory -C programs 2>/dev/null || true
+	@mkdir -p $(BIN_DIR)
+	@for p in programs/*.elf; do \
+	    [ -f "$$p" ] || continue; \
+	    base=$$(basename "$$p" .elf); \
+	    up=$$(echo "$$base" | tr a-z A-Z); \
+	    cp -f "$$p" "$(BIN_DIR)/$$up.ELF"; \
+	    echo "[bin] $$p → $(BIN_DIR)/$$up.ELF"; \
+	done
 
 # ─── initrd (RAM disk) ───────────────────────────────
 $(INITRD_IMG): $(INITRD_SRC)
@@ -171,6 +186,78 @@ debug: $(ISO_IMAGE) $(DISK_IMG) $(USB_IMG)
 	    -s -S -serial file:serial.log &
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_ELF)"
+
+# ─── Прошивка на USB-флешку ──────────────────────────
+.PHONY: flash flash-iso flash-disk flash-list
+
+flash-list:
+	@echo "Доступные блочные устройства:"
+	@lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>/dev/null || true
+	@echo ""
+	@echo "Использование: make flash DEV=/dev/sdX"
+
+define check_dev
+	@if [ -z "$(DEV)" ]; then \
+	    echo "ОШИБКА: не указано устройство."; \
+	    echo "Использование: make flash DEV=/dev/sdX"; \
+	    echo "Список устройств: make flash-list"; \
+	    exit 1; \
+	fi
+	@if [ ! -b "$(DEV)" ]; then \
+	    echo "ОШИБКА: $(DEV) не является блочным устройством."; \
+	    exit 1; \
+	fi
+	@if lsblk -no MOUNTPOINT $(DEV) 2>/dev/null | grep -q .; then \
+	    echo "ВНИМАНИЕ: $(DEV) смонтирован. Размонтируй: sudo umount $(DEV)*"; \
+	    exit 1; \
+	fi
+endef
+
+flash-iso: $(ISO_IMAGE)
+	$(call check_dev)
+	@echo "=================================================="
+	@echo "  Устройство: $(DEV)"
+	@lsblk -o NAME,SIZE,TYPE,MODEL $(DEV) 2>/dev/null || true
+	@echo "  Образ:      $(ISO_IMAGE) ($$(stat -c%s $(ISO_IMAGE) | numfmt --to=iec))"
+	@echo ""
+	@echo "  Содержимое initrd (data.img):"
+	@mdir -i $(INITRD_IMG) -/ :: 2>/dev/null || echo "    (mdir не установлен)"
+	@echo ""
+	@echo "  ВСЁ СОДЕРЖИМОЕ $(DEV) БУДЕТ УНИЧТОЖЕНО."
+	@echo "=================================================="
+	@read -p "Продолжить? [y/N] " ans; \
+	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
+	    echo "Отменено."; exit 1; \
+	fi
+	-sudo umount $(DEV)* 2>/dev/null || true
+	@echo "[flash] пишем $(ISO_IMAGE) на $(DEV)..."
+	sudo dd if=$(ISO_IMAGE) of=$(DEV) bs=4M status=progress conv=fsync
+	sudo sync
+	@echo "[flash] готово."
+
+flash: flash-iso
+
+flash-disk: $(DISK_IMG)
+	$(call check_dev)
+	@echo "=================================================="
+	@echo "  Устройство: $(DEV)"
+	@lsblk -o NAME,SIZE,TYPE,MODEL $(DEV) 2>/dev/null || true
+	@echo "  Образ:      $(DISK_IMG) ($$(stat -c%s $(DISK_IMG) | numfmt --to=iec))"
+	@echo ""
+	@echo "  Содержимое (disk.img):"
+	@mdir -i $(DISK_IMG) -/ :: 2>/dev/null || echo "    (mdir не установлен)"
+	@echo ""
+	@echo "  ВСЁ СОДЕРЖИМОЕ $(DEV) БУДЕТ УНИЧТОЖЕНО."
+	@echo "=================================================="
+	@read -p "Продолжить? [y/N] " ans; \
+	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
+	    echo "Отменено."; exit 1; \
+	fi
+	-sudo umount $(DEV)* 2>/dev/null || true
+	@echo "[flash] пишем $(DISK_IMG) на $(DEV)..."
+	sudo dd if=$(DISK_IMG) of=$(DEV) bs=4M status=progress conv=fsync
+	sudo sync
+	@echo "[flash] готово."
 
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR)

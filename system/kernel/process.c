@@ -46,7 +46,6 @@ static process_t* alloc_slot(void) {
     return NULL;
 }
 
-/* Закрыть все fd (кроме 0/1/2). */
 static void close_all_fds(process_t* p) {
     for (int i = 0; i < MAX_FDS; i++) {
         if (!p->fds[i].used) continue;
@@ -82,17 +81,31 @@ u32 process_create(const char* name, void (*fn)(void*), void* arg) {
     *--sp = (u32) fn;
     *--sp = (u32) arg;
     *--sp = (u32) thread_entry;
-    *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
-    *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
-    *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x10;
+
+    /* pusha — edi..eax. */
+    *--sp = 0;   /* edi */
+    *--sp = 0;   /* esi */
+    *--sp = 0;   /* ebp */
+    *--sp = 0;   /* esp_dummy */
+    *--sp = 0;   /* ebx */
+    *--sp = 0;   /* edx */
+    *--sp = 0;   /* ecx */
+    *--sp = 0;   /* eax */
+
+    /* Kernel thread — работает в ring 0, ds/es/fs/gs = 0x10. */
+    *--sp = 0x10;   /* gs */
+    *--sp = 0x10;   /* fs */
+    *--sp = 0x10;   /* es */
+    *--sp = 0x10;   /* ds */
 
     p->esp = (u32) sp;
+
     printf("[proc] created '%s' pid=%u esp=0x%08x (kernel)\n",
            p->name, p->pid, p->esp);
     return p->pid;
 }
 
-/* ─── user-stack с argc/argv ─────────────────────── */
+/* ─── Построение argc/argv на user-стеке ─────────── */
 
 static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                             int argc, char** argv) {
@@ -110,12 +123,20 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
         memcpy((void*) pp, argv[i], len);
         argv_user[i] = vp;
     }
+
     while (pp & 3) { pp--; vp--; }
-    pp -= 4; vp -= 4; *(u32*) pp = 0;
+
+    pp -= 4; vp -= 4;
+    *(u32*) pp = 0;
+
     for (i = argc - 1; i >= 0; i--) {
-        pp -= 4; vp -= 4; *(u32*) pp = argv_user[i];
+        pp -= 4; vp -= 4;
+        *(u32*) pp = argv_user[i];
     }
-    pp -= 4; vp -= 4; *(u32*) pp = (u32) argc;
+
+    pp -= 4; vp -= 4;
+    *(u32*) pp = (u32) argc;
+
     return vp;
                             }
 
@@ -179,16 +200,40 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                     }
                                 }
 
+                                /* Формируем стек для первого switch_to:
+                                 *   switch_to → popa, pop сегментов, ret в user_entry
+                                 *   user_entry → iret в ring 3. */
                                 u32* sp = (u32*) p->kstack_top;
-                                *--sp = 0x23;
-                                *--sp = p->user_stack;
-                                *--sp = 0x202;
-                                *--sp = 0x1B;
-                                *--sp = p->user_entry;
+
+                                /* Данные для iret. */
+                                *--sp = 0x23;                   /* ss_user = user data (RPL=3) */
+                                *--sp = p->user_stack;          /* user_esp */
+                                *--sp = 0x202;                  /* eflags (IF=1) */
+                                *--sp = 0x1B;                   /* cs_user = user code (RPL=3) */
+                                *--sp = p->user_entry;          /* user_eip */
+
+                                /* eip для ret в switch_to. */
                                 *--sp = (u32) user_entry;
-                                *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
-                                *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
-                                *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x10;
+
+                                /* pusha — edi..eax. */
+                                *--sp = 0;   /* edi */
+                                *--sp = 0;   /* esi */
+                                *--sp = 0;   /* ebp */
+                                *--sp = 0;   /* esp_dummy */
+                                *--sp = 0;   /* ebx */
+                                *--sp = 0;   /* edx */
+                                *--sp = 0;   /* ecx */
+                                *--sp = 0;   /* eax */
+
+                                /* ── Сегменты user-mode: DPL=3, RPL=3 = 0x23. ──
+                                 * В ring 3 ds/es/fs/gs ДОЛЖНЫ указывать на user-data сегмент
+                                 * (индекс 4 в GDT, селектор 4<<3 | RPL(3) = 0x23).
+                                 * Kernel data (0x10) имеет DPL=0, из CPL=3 обращение через него
+                                 * даст #GP(0). QEMU это часто прощает, реальный Intel — нет. */
+                                *--sp = 0x23;   /* gs */
+                                *--sp = 0x23;   /* fs */
+                                *--sp = 0x23;   /* es */
+                                *--sp = 0x23;   /* ds */
 
                                 p->esp = (u32) sp;
 

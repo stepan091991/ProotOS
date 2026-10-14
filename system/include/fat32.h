@@ -4,8 +4,8 @@
 #include "types.h"
 #include "blockdev.h"
 
-#define FAT32_MAX_NAME 64
-#define FAT32_MAX_PATH 256
+#define FAT32_MAX_NAME 256
+#define FAT32_MAX_PATH 512
 
 typedef struct {
     u32 bytes_per_sector;
@@ -31,7 +31,7 @@ typedef struct {
 } fat32_file_t;
 
 typedef struct {
-    char name[FAT32_MAX_NAME];
+    char name[FAT32_MAX_NAME];   /* LFN если есть, иначе 8.3 */
     u32  size;
     u32  first_cluster;
     u8   attributes;
@@ -49,18 +49,10 @@ void fat32_dump_info(void);
 void fat32_test(void);
 
 /* ─── Write API ─────────────────────────────────────── */
-/* Создать пустой файл. 1 = успех. */
 int  fat32_create(const char* path);
-
-/* Удалить файл или пустую директорию. */
 int  fat32_delete(const char* path);
-
-/* Создать директорию. */
 int  fat32_mkdir(const char* path);
-
-/* Записать файл целиком (создаёт или перезаписывает). */
 int  fat32_write_file(const char* path, const void* data, u32 size);
-
 int  fat32_seek(fat32_file_t* file, u32 offset);
 
 #endif

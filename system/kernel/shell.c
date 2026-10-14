@@ -355,6 +355,7 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                              printf("  sleep MS            - sleep N milliseconds\n");
                              printf("  kill PID            - kill process by pid\n");
                              printf("  wait PID            - wait for process to finish\n");
+                             printf("\n  <cmd>               - if not builtin, run /BIN/<CMD>[.ELF]\n");
                              printf("\nLine editing: arrows, Home, End, Backspace, Delete\n");
                              printf("History: Up/Down arrows. Pager: q quits, any key next page\n");
                              pager_end();
@@ -614,23 +615,14 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
 
                          /* ─── exec ─────────────────────────────────────────── */
 
-                         static void cmd_exec(const char* args) {
-                             if (*args == '\0') {
-                                 printf("usage: exec <path-to-elf> [args...] [< FILE]\n");
-                                 return;
-                             }
-
-                             static char argbuf[256];
-                             u32 len = (u32) strlen(args);
-                             if (len >= sizeof(argbuf)) len = sizeof(argbuf) - 1;
-                             for (u32 i = 0; i < len; i++) argbuf[i] = args[i];
-                             argbuf[len] = '\0';
-
-                             char* argv[16];
-                             int   argc = 0;
-                             char* stdin_path = NULL;
-
+                         /* Разбор строки args на argv с учётом "< FILE" для stdin redirect.
+                          * Модифицирует буфер argbuf. Возвращает argc, argv, stdin_path. */
+                         static int parse_argv(char* argbuf, char** argv, int argv_max,
+                                               const char** stdin_out) {
+                             int argc = 0;
                              char* p = argbuf;
+                             *stdin_out = NULL;
+
                              while (*p) {
                                  while (*p == ' ' || *p == '\t') p++;
                                  if (!*p) break;
@@ -639,132 +631,238 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                      p++;
                                      while (*p == ' ' || *p == '\t') p++;
                                      if (!*p) break;
-                                     stdin_path = p;
+                                     *stdin_out = p;
                                      while (*p && *p != ' ' && *p != '\t') p++;
                                      if (*p) *p++ = '\0';
                                      continue;
                                  }
 
-                                 if (argc < 16) argv[argc++] = p;
+                                 if (argc < argv_max) argv[argc++] = p;
                                  while (*p && *p != ' ' && *p != '\t') p++;
                                  if (*p) *p++ = '\0';
                              }
+                             return argc;
+                                               }
 
-                             if (argc == 0) {
-                                 printf("exec: missing file\n");
-                                 return;
-                             }
+                                               static void cmd_exec(const char* args) {
+                                                   if (*args == '\0') {
+                                                       printf("usage: exec <path-to-elf> [args...] [< FILE]\n");
+                                                       return;
+                                                   }
 
-                             char fullpath[FAT32_MAX_PATH];
-                             const char* fp = resolve_path(argv[0], fullpath);
+                                                   static char argbuf[256];
+                                                   u32 len = (u32) strlen(args);
+                                                   if (len >= sizeof(argbuf)) len = sizeof(argbuf) - 1;
+                                                   for (u32 i = 0; i < len; i++) argbuf[i] = args[i];
+                                                   argbuf[len] = '\0';
 
-                             const char* slash = fp;
-                             for (const char* q = fp; *q; q++) if (*q == '/') slash = q + 1;
+                                                   char* argv[16];
+                                                   const char* stdin_path = NULL;
+                                                   int argc = parse_argv(argbuf, argv, 16, &stdin_path);
 
-                             u32 pid = process_create_user(slash, fp, argc, argv, stdin_path);
-                             if (pid == 0) {
-                                 printf("exec: failed to load %s\n", fp);
-                             } else {
-                                 printf("exec: started pid %u, waiting...\n", pid);
-                                 process_wait(pid);
-                                 printf("exec: pid %u finished\n", pid);
-                             }
-                         }
+                                                   if (argc == 0) {
+                                                       printf("exec: missing file\n");
+                                                       return;
+                                                   }
 
-                         /* ─── Диспетчер ───────────────────────────────────── */
+                                                   char fullpath[FAT32_MAX_PATH];
+                                                   const char* fp = resolve_path(argv[0], fullpath);
 
-                         static void execute(const char* line) {
-                             while (*line == ' ' || *line == '\t') line++;
-                             if (*line == '\0') return;
+                                                   const char* slash = fp;
+                                                   for (const char* q = fp; *q; q++) if (*q == '/') slash = q + 1;
 
-                             char cmd[64];
-                             u32  ci = 0;
-                             while (*line && *line != ' ' && *line != '\t' && ci < 63) cmd[ci++] = *line++;
-                             cmd[ci] = '\0';
-                             while (*line == ' ' || *line == '\t') line++;
-                             const char* args = line;
+                                                   u32 pid = process_create_user(slash, fp, argc, argv, stdin_path);
+                                                   if (pid == 0) {
+                                                       printf("exec: failed to load %s\n", fp);
+                                                   } else {
+                                                       printf("exec: started pid %u, waiting...\n", pid);
+                                                       process_wait(pid);
+                                                       printf("exec: pid %u finished\n", pid);
+                                                   }
+                                               }
 
-                             if (strcmp(cmd, "help") == 0) {
-                                 cmd_help();
-                             } else if (strcmp(cmd, "clear") == 0) {
-                                 cmd_clear();
-                             } else if (strcmp(cmd, "banner") == 0) {
-                                 cmd_banner();
-                             } else if (strcmp(cmd, "ticks") == 0) {
-                                 cmd_ticks();
-                             } else if (strcmp(cmd, "echo") == 0) {
-                                 cmd_echo(args);
-                             } else if (strcmp(cmd, "grep") == 0) {
-                                 cmd_grep(args);
-                             } else if (strcmp(cmd, "pager") == 0) {
-                                 cmd_pager(args);
-                             } else if (strcmp(cmd, "panic") == 0) {
-                                 panic("panic command from shell");
-                             } else if (strcmp(cmd, "reboot") == 0) {
-                                 cmd_reboot();
-                             } else if (strcmp(cmd, "halt") == 0) {
-                                 printf("halting...\n");
-                                 halt();
-                             } else if (strcmp(cmd, "mem") == 0) {
-                                 pmm_dump();
-                             } else if (strcmp(cmd, "heap") == 0) {
-                                 kheap_dump();
-                             } else if (strcmp(cmd, "paging") == 0) {
-                                 paging_dump();
-                             } else if (strcmp(cmd, "ata") == 0) {
-                                 ata_dump_info();
-                                 ata_test();
-                             } else if (strcmp(cmd, "bdev") == 0) {
-                                 bdev_dump();
-                             } else if (strcmp(cmd, "fat32") == 0) {
-                                 pager_begin();
-                                 fat32_test();
-                                 pager_end();
-                             } else if (strcmp(cmd, "ls") == 0) {
-                                 cmd_ls(args);
-                             } else if (strcmp(cmd, "cd") == 0) {
-                                 cmd_cd(args);
-                             } else if (strcmp(cmd, "pwd") == 0) {
-                                 cmd_pwd();
-                             } else if (strcmp(cmd, "cat") == 0) {
-                                 cmd_cat(args);
-                             } else if (strcmp(cmd, "touch") == 0) {
-                                 cmd_touch(args);
-                             } else if (strcmp(cmd, "mkdir") == 0) {
-                                 cmd_mkdir(args);
-                             } else if (strcmp(cmd, "rm") == 0) {
-                                 cmd_rm(args);
-                             } else if (strcmp(cmd, "write") == 0) {
-                                 cmd_write(args);
-                             } else if (strcmp(cmd, "vmmtest") == 0) {
-                                 vmm_test();
-                             } else if (strcmp(cmd, "vmm") == 0) {
-                                 if (*args == '\0') printf("usage: vmm <hex-address>\n");
-                                 else              vmm_dump(parse_hex(args));
-                             } else if (strcmp(cmd, "pci") == 0) {
-                                 pci_dump();
-                             } else if (strcmp(cmd, "exec") == 0) {
-                                 cmd_exec(args);
-                             } else if (strcmp(cmd, "ps") == 0 || strcmp(cmd, "threads") == 0) {
-                                 cmd_ps();
-                             } else if (strcmp(cmd, "sleep") == 0) {
-                                 cmd_sleep(args);
-                             } else if (strcmp(cmd, "kill") == 0) {
-                                 cmd_kill(args);
-                             } else if (strcmp(cmd, "wait") == 0) {
-                                 cmd_wait(args);
-                             } else {
-                                 printf("Unknown command: %s\n", cmd);
-                                 printf("Type 'help' for a list.\n");
-                             }
-                         }
+                                               /* ─── Fallback: запуск программ из /BIN ──────────── */
 
-                         void shell_run(void) {
-                             char line[LINE_MAX];
-                             printf("\n");
-                             for (;;) {
-                                 printf("%s%s ", PROMPT, current_dir);
-                                 read_line(line, LINE_MAX);
-                                 execute(line);
-                             }
-                         }
+                                               /* Ищет CMD в /BIN/, игнорируя регистр и расширение.
+                                                * Сравнивает базовое имя файла (до точки) с CMD.
+                                                * Возвращает 1 и полный путь, если нашли. */
+                                               static int try_resolve(const char* cmd, char* out, u32 outsz) {
+                                                   fat32_dirent_t entries[64];
+                                                   int n = fat32_list("/BIN", entries, 64);
+                                                   if (n <= 0) return 0;
+                                                   if (n > 64) n = 64;
+
+                                                   for (int i = 0; i < n; i++) {
+                                                       if (entries[i].is_directory) continue;
+
+                                                       const char* name = entries[i].name;
+
+                                                       /* Отсекаем расширение: берём всё до первой точки. */
+                                                       char base[FAT32_MAX_NAME];
+                                                       u32 bl = 0;
+                                                       for (u32 k = 0; name[k] && name[k] != '.' && bl < FAT32_MAX_NAME - 1; k++) {
+                                                           base[bl++] = name[k];
+                                                       }
+                                                       base[bl] = '\0';
+
+                                                       /* Регистронезависимое сравнение с cmd. */
+                                                       u32 ci = 0;
+                                                       int match = 1;
+                                                       for (;;) {
+                                                           char a = cmd[ci];
+                                                           char b = base[ci];
+
+                                                           if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+                                                           if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+
+                                                           if (a != b) { match = 0; break; }
+                                                           if (a == '\0') break;   /* оба закончились одновременно */
+                                                               ci++;
+                                                       }
+                                                       if (!match) continue;
+
+                                                       /* Собираем "/BIN/" + name */
+                                                       u32 w = 0;
+                                                       const char* prefix = "/BIN/";
+                                                       while (prefix[w] && w + 1 < outsz) { out[w] = prefix[w]; w++; }
+                                                       u32 nl = 0;
+                                                       while (name[nl] && w + nl + 1 < outsz) { out[w + nl] = name[nl]; nl++; }
+                                                       out[w + nl] = '\0';
+                                                       return 1;
+                                                   }
+                                                   return 0;
+                                               }
+
+                                               static void run_bin(const char* cmd, const char* args) {
+                                                   char binpath[FAT32_MAX_PATH];
+                                                   if (!try_resolve(cmd, binpath, sizeof(binpath))) {
+                                                       printf("Unknown command: %s\n", cmd);
+                                                       printf("Type 'help' for a list.\n");
+                                                       return;
+                                                   }
+
+                                                   /* Собираем argbuf: "cmd args..." */
+                                                   static char argbuf[256];
+                                                   u32 a = 0;
+                                                   u32 cl = (u32) strlen(cmd);
+                                                   if (cl > 200) cl = 200;
+                                                   for (u32 i = 0; i < cl; i++) argbuf[a++] = cmd[i];
+                                                   argbuf[a++] = ' ';
+                                                   u32 al = (u32) strlen(args);
+                                                   if (al > sizeof(argbuf) - a - 1) al = sizeof(argbuf) - a - 1;
+                                                   for (u32 i = 0; i < al; i++) argbuf[a++] = args[i];
+                                                   argbuf[a] = '\0';
+
+                                                   char* argv[16];
+                                                   const char* stdin_path = NULL;
+                                                   int argc = parse_argv(argbuf, argv, 16, &stdin_path);
+                                                   if (argc == 0) return;
+
+                                                   const char* slash = binpath;
+                                                   for (const char* q = binpath; *q; q++) if (*q == '/') slash = q + 1;
+
+                                                   u32 pid = process_create_user(slash, binpath, argc, argv, stdin_path);
+                                                   if (pid == 0) {
+                                                       printf("run: failed to load %s\n", binpath);
+                                                   } else {
+                                                       process_wait(pid);
+                                                   }
+                                               }
+
+                                               /* ─── Диспетчер ───────────────────────────────────── */
+
+                                               static void execute(const char* line) {
+                                                   while (*line == ' ' || *line == '\t') line++;
+                                                   if (*line == '\0') return;
+
+                                                   char cmd[64];
+                                                   u32  ci = 0;
+                                                   while (*line && *line != ' ' && *line != '\t' && ci < 63) cmd[ci++] = *line++;
+                                                   cmd[ci] = '\0';
+                                                   while (*line == ' ' || *line == '\t') line++;
+                                                   const char* args = line;
+
+                                                   if (strcmp(cmd, "help") == 0) {
+                                                       cmd_help();
+                                                   } else if (strcmp(cmd, "clear") == 0) {
+                                                       cmd_clear();
+                                                   } else if (strcmp(cmd, "banner") == 0) {
+                                                       cmd_banner();
+                                                   } else if (strcmp(cmd, "ticks") == 0) {
+                                                       cmd_ticks();
+                                                   } else if (strcmp(cmd, "echo") == 0) {
+                                                       cmd_echo(args);
+                                                   } else if (strcmp(cmd, "grep") == 0) {
+                                                       cmd_grep(args);
+                                                   } else if (strcmp(cmd, "pager") == 0) {
+                                                       cmd_pager(args);
+                                                   } else if (strcmp(cmd, "panic") == 0) {
+                                                       panic("panic command from shell");
+                                                   } else if (strcmp(cmd, "reboot") == 0) {
+                                                       cmd_reboot();
+                                                   } else if (strcmp(cmd, "halt") == 0) {
+                                                       printf("halting...\n");
+                                                       halt();
+                                                   } else if (strcmp(cmd, "mem") == 0) {
+                                                       pmm_dump();
+                                                   } else if (strcmp(cmd, "heap") == 0) {
+                                                       kheap_dump();
+                                                   } else if (strcmp(cmd, "paging") == 0) {
+                                                       paging_dump();
+                                                   } else if (strcmp(cmd, "ata") == 0) {
+                                                       ata_dump_info();
+                                                       ata_test();
+                                                   } else if (strcmp(cmd, "bdev") == 0) {
+                                                       bdev_dump();
+                                                   } else if (strcmp(cmd, "fat32") == 0) {
+                                                       pager_begin();
+                                                       fat32_test();
+                                                       pager_end();
+                                                   } else if (strcmp(cmd, "ls") == 0) {
+                                                       cmd_ls(args);
+                                                   } else if (strcmp(cmd, "cd") == 0) {
+                                                       cmd_cd(args);
+                                                   } else if (strcmp(cmd, "pwd") == 0) {
+                                                       cmd_pwd();
+                                                   } else if (strcmp(cmd, "cat") == 0) {
+                                                       cmd_cat(args);
+                                                   } else if (strcmp(cmd, "touch") == 0) {
+                                                       cmd_touch(args);
+                                                   } else if (strcmp(cmd, "mkdir") == 0) {
+                                                       cmd_mkdir(args);
+                                                   } else if (strcmp(cmd, "rm") == 0) {
+                                                       cmd_rm(args);
+                                                   } else if (strcmp(cmd, "write") == 0) {
+                                                       cmd_write(args);
+                                                   } else if (strcmp(cmd, "vmmtest") == 0) {
+                                                       vmm_test();
+                                                   } else if (strcmp(cmd, "vmm") == 0) {
+                                                       if (*args == '\0') printf("usage: vmm <hex-address>\n");
+                                                       else              vmm_dump(parse_hex(args));
+                                                   } else if (strcmp(cmd, "pci") == 0) {
+                                                       pci_dump();
+                                                   } else if (strcmp(cmd, "exec") == 0) {
+                                                       cmd_exec(args);
+                                                   } else if (strcmp(cmd, "ps") == 0 || strcmp(cmd, "threads") == 0) {
+                                                       cmd_ps();
+                                                   } else if (strcmp(cmd, "sleep") == 0) {
+                                                       cmd_sleep(args);
+                                                   } else if (strcmp(cmd, "kill") == 0) {
+                                                       cmd_kill(args);
+                                                   } else if (strcmp(cmd, "wait") == 0) {
+                                                       cmd_wait(args);
+                                                   } else {
+                                                       /* Fallback: пробуем найти CMD в /BIN/ и запустить. */
+                                                       run_bin(cmd, args);
+                                                   }
+                                               }
+
+                                               void shell_run(void) {
+                                                   char line[LINE_MAX];
+                                                   printf("\n");
+                                                   for (;;) {
+                                                       printf("%s%s ", PROMPT, current_dir);
+                                                       read_line(line, LINE_MAX);
+                                                       execute(line);
+                                                   }
+                                               }
