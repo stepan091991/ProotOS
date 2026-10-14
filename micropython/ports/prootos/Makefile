@@ -10,6 +10,7 @@ CFLAGS = -m32 -ffreestanding -nostdlib \
          -fno-pic -fno-pie -fno-stack-protector \
          -fno-common -O2 -Wall -Wno-error \
          -Wpointer-arith -std=gnu99 -DNDEBUG \
+         -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
          -I. -I$(TOP) -I$(BUILD)
 
 LDFLAGS = -m elf_i386 -T linker.ld
@@ -52,19 +53,14 @@ SRC_C = \
 	$(SRC_PY_ARGFILE) \
 	$(SRC_PY_ARGPARSE)
 
-# Shared — readline и pyexec.
+# ─── Shared: только pyexec (readline у нас своя) ──
 SRC_SHARED = \
-	$(TOP)/shared/readline/readline.c \
 	$(TOP)/shared/runtime/pyexec.c
 
 OBJ = $(PY_CORE_O) \
       $(addprefix $(BUILD)/, $(patsubst %.c,%.o,$(notdir $(SRC_C)))) \
       $(addprefix $(BUILD)/, $(patsubst %.c,%.o,$(notdir $(SRC_SHARED)))) \
       $(addprefix $(BUILD)/, libc_shim.o mphalport.o main.o)
-
-# Явные правила для shared.
-$(BUILD)/readline.o: $(TOP)/shared/readline/readline.c
-	$(call compile_c)
 
 $(BUILD)/pyexec.o: $(TOP)/shared/runtime/pyexec.c
 	$(call compile_c)

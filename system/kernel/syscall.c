@@ -24,6 +24,7 @@ void syscall_handler(registers_t* regs) {
             }
             break;
         }
+
         case SYS_WRITE: {
             u32         fd  = regs->ebx;
             const char* buf = (const char*) regs->ecx;
@@ -38,6 +39,7 @@ void syscall_handler(registers_t* regs) {
             }
             break;
         }
+
         case SYS_READ: {
             u32   fd  = regs->ebx;
             char* buf = (char*) regs->ecx;
@@ -47,15 +49,12 @@ void syscall_handler(registers_t* regs) {
                 while (i < len) {
                     int c = kbd_buffer_pop();
                     if (c < 0) {
-                        /* Разрешить прерывания — иначе hlt зависнет. */
-                        __asm__ volatile ("sti");
-                        yield();
-                        __asm__ volatile ("hlt");
-                        __asm__ volatile ("cli");
-                        continue;
+                        /* Пока неблокирующий режим: возвращаем то, что есть.
+                         * Юзер крутится в busy-loop, таймер сам делает schedule. */
+                        regs->eax = i;
+                        return;
                     }
                     buf[i++] = (char) c;
-                    //vga_putchar((char) c);
                     if (c == '\n') break;
                 }
                 regs->eax = i;
@@ -64,17 +63,21 @@ void syscall_handler(registers_t* regs) {
             }
             break;
         }
+
         case SYS_GETPID: {
             regs->eax = current ? current->pid : 0;
             break;
         }
+
         case SYS_BRK: {
             (void) regs->ebx;
             regs->eax = 0x08000000;
             break;
         }
+
         default:
-            printf("[syscall] unknown nr=%u\n", nr);
+            printf("[syscall] unknown nr=%u  ebx=%u ecx=%u edx=%u eip=%p\n",
+                   nr, regs->ebx, regs->ecx, regs->edx, (void*) regs->eip);
             regs->eax = (u32)-1;
             break;
     }

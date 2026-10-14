@@ -5,26 +5,10 @@ SECTIONS
 {
     . = 0xD0000000;
 
-    .text : {
-        *(.text)
-        *(.text*)
-    }
-
-    .rodata : {
-        *(.rodata)
-        *(.rodata*)
-    }
-
-    .data : {
-        *(.data)
-        *(.data*)
-    }
-
-    .bss : {
-        *(.bss)
-        *(.bss*)
-        *(COMMON)
-    }
+    .text : { *(.text) *(.text*) }
+    .rodata : { *(.rodata) *(.rodata*) }
+    .data : { *(.data) *(.data*) }
+    .bss : { *(.bss) *(.bss*) *(COMMON) }
 
     /DISCARD/ : {
         *(.comment)
