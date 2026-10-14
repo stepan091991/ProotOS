@@ -9,7 +9,9 @@
 #define KERNEL_STACK_SIZE   4096
 #define USER_STACK_SIZE     4096
 #define SCHED_QUANTUM       5
-#define MAX_FDS             16
+#define MAX_FDS             8
+#define FD_PATH_MAX         128
+#define FD_WBUF_MAX         512
 
 typedef enum {
     PROC_UNUSED = 0,
@@ -18,6 +20,15 @@ typedef enum {
     PROC_SLEEPING,
     PROC_ZOMBIE,
 } proc_state_t;
+
+typedef struct process_fd {
+    u8           used;
+    u8           wmode;               /* 1 = открыт на запись */
+    char         path[FD_PATH_MAX];
+    fat32_file_t file;
+    u8           wbuf[FD_WBUF_MAX];
+    u32          wlen;
+} process_fd_t;
 
 typedef struct process {
     u32 pid;
@@ -36,9 +47,7 @@ typedef struct process {
     u32 exit_code;
     u32 wake_tick;
 
-    /* fd-таблица: 0=stdin, 1=stdout, 2=stderr, 3..MAX_FDS-1 — файлы. */
-    fat32_file_t fds[MAX_FDS];
-    u8           fd_open[MAX_FDS];
+    process_fd_t fds[MAX_FDS];
 } process_t;
 
 extern process_t* current;
@@ -51,9 +60,9 @@ void process_init(void);
 
 u32 process_create(const char* name, void (*fn)(void*), void* arg);
 
-/* С argc/argv. */
 u32 process_create_user(const char* name, const char* path,
-                        int argc, char** argv);
+                        int argc, char** argv,
+                        const char* stdin_path);
 
 void scheduler_tick(void);
 void schedule(void);

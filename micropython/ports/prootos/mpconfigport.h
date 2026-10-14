@@ -6,15 +6,15 @@
 #define MICROPY_ENABLE_GC           (1)
 #define MICROPY_HELPER_REPL         (1)
 #define MICROPY_MODULE_FROZEN_MPY   (0)
-#define MICROPY_ENABLE_EXTERNAL_IMPORT    (0)
+#define MICROPY_ENABLE_EXTERNAL_IMPORT    (1)
 
 #define MICROPY_ALLOC_PATH_MAX            (256)
 #define MICROPY_ALLOC_PARSE_CHUNK_INIT    (16)
 
 #define MICROPY_PY_SYS_MODULES            (0)
 #define MICROPY_PY_SYS_EXIT               (0)
-#define MICROPY_PY_SYS_PATH               (0)
-#define MICROPY_PY_SYS_ARGV               (0)
+#define MICROPY_PY_SYS_ARGV               (1)
+#define MICROPY_PY_SYS_PATH               (1)
 
 typedef long mp_off_t;
 

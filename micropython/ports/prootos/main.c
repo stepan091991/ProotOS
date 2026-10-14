@@ -12,6 +12,8 @@
 #include "py/mphal.h"
 #include "py/mpprint.h"
 #include "py/misc.h"
+#include "py/objlist.h"
+#include "py/objstr.h"
 #include "shared/runtime/pyexec.h"
 
 static char *stack_top;
@@ -24,10 +26,10 @@ extern void sys_exit(int code);
 extern int  sys_open(const char* path, int flags);
 extern int  sys_read(int fd, void* buf, unsigned int len);
 extern int  sys_close(int fd);
+extern int  sys_stat(const char* path);
 
 int main(int argc, char **argv);
 
-/* _start — точка входа ELF. ABI: [esp]=argc, [esp+4]=argv[]. */
 __asm__(
     ".text\n"
     ".globl _start\n"
@@ -46,6 +48,28 @@ __asm__(
     ".size _start, . - _start\n"
 );
 
+#if MICROPY_PY_SYS_ARGV
+/* sys.argv = [argv[0], argv[1], ...]
+ * mp_sys_argv_obj — встроенный mp_obj_list_t (root pointer, не указатель). */
+static void fill_sys_argv(int argc, char **argv) {
+    mp_obj_list_t *list = &MP_STATE_VM(mp_sys_argv_obj);
+    mp_obj_list_init(list, 0);
+    for (int i = 0; i < argc; i++) {
+        mp_obj_list_append(MP_OBJ_FROM_PTR(list),
+                           mp_obj_new_str(argv[i], strlen(argv[i])));
+    }
+}
+#endif
+
+#if MICROPY_PY_SYS_PATH
+/* mp_sys_path — уже созданный и непустой list ("" и ".frozen" там с mp_init).
+ * Дописываем наши пути. mp_sys_path — макрос в py/runtime.h. */
+static void fill_sys_path(void) {
+    mp_obj_list_append(mp_sys_path, mp_obj_new_str("/", 1));
+    mp_obj_list_append(mp_sys_path, mp_obj_new_str("/LIB", 4));
+}
+#endif
+
 int main(int argc, char **argv) {
     int stack_dummy;
     stack_top = (char *)&stack_dummy;
@@ -56,8 +80,14 @@ int main(int argc, char **argv) {
 
     mp_init();
 
+    #if MICROPY_PY_SYS_ARGV
+    fill_sys_argv(argc, argv);
+    #endif
+    #if MICROPY_PY_SYS_PATH
+    fill_sys_path();
+    #endif
+
     if (argc >= 2 && argv[1][0] != '-') {
-        /* exec micropy.elf /path/to/script.py */
         mp_printf(&mp_plat_print, "[micropy] running %s\r\n", argv[1]);
         int r = pyexec_file(argv[1]);
         mp_printf(&mp_plat_print, "[micropy] exit code %d\r\n", r);
@@ -85,7 +115,7 @@ void gc_collect(void) {
 }
 #endif
 
-/* ─── Файловый ввод для lexer ─────────────────── */
+/* ─── mp_lexer / mp_import_stat ─────────────────── */
 
 typedef struct _mp_reader_prootos_t {
     int  fd;
@@ -118,23 +148,18 @@ mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
         mp_raise_OSError(MP_ENOENT);
         return NULL;
     }
-
     mp_reader_prootos_t *r = m_new_obj(mp_reader_prootos_t);
-    r->fd  = fd;
-    r->pos = 0;
-    r->len = 0;
-
+    r->fd = fd; r->pos = 0; r->len = 0;
     mp_reader_t reader;
     reader.data     = r;
     reader.readbyte = mp_reader_prootos_readbyte;
     reader.close    = mp_reader_prootos_close;
-
     return mp_lexer_new(filename, reader);
 }
 
 mp_import_stat_t mp_import_stat(const char *path) {
-    int fd = sys_open(path, 0);
-    if (fd < 0) return MP_IMPORT_STAT_NO_EXIST;
-    sys_close(fd);
-    return MP_IMPORT_STAT_FILE;
+    int t = sys_stat(path);
+    if (t == 2) return MP_IMPORT_STAT_DIR;
+    if (t == 1) return MP_IMPORT_STAT_FILE;
+    return MP_IMPORT_STAT_NO_EXIST;
 }

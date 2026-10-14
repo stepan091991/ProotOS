@@ -7,6 +7,14 @@
 #include "kbd_buffer.h"
 #include "process.h"
 #include "fat32.h"
+#include "pit.h"
+
+static int stat_type(const char* path) {
+    if (fat32_is_dir(path)) return STAT_DIR;
+    fat32_file_t f;
+    if (fat32_open(path, &f)) { fat32_close(&f); return STAT_FILE; }
+    return STAT_NOENT;
+}
 
 void syscall_handler(registers_t* regs) {
     u32 nr = regs->eax;
@@ -19,10 +27,7 @@ void syscall_handler(registers_t* regs) {
                 printf("[syscall] pid %u exit(%u)\n", current->pid, code);
                 current->state = PROC_ZOMBIE;
             }
-            for (;;) {
-                schedule();
-                __asm__ volatile ("hlt");
-            }
+            for (;;) { schedule(); __asm__ volatile ("hlt"); }
             break;
         }
 
@@ -30,68 +35,95 @@ void syscall_handler(registers_t* regs) {
             u32         fd  = regs->ebx;
             const char* buf = (const char*) regs->ecx;
             u32         len = regs->edx;
+            if (!buf) { regs->eax = (u32)-1; break; }
+
             if (fd == 1 || fd == 2) {
-                if (buf) {
-                    for (u32 i = 0; i < len; i++) vga_putchar(buf[i]);
-                }
+                for (u32 i = 0; i < len; i++) vga_putchar(buf[i]);
                 regs->eax = len;
-            } else {
-                regs->eax = (u32)-1;
-            }
-            break;
-        }
-
-        case SYS_READ: {
-            u32   fd  = regs->ebx;
-            char* buf = (char*) regs->ecx;
-            u32   len = regs->edx;
-
-            if (!buf || len == 0) {
-                regs->eax = (u32)-1;
-                break;
-            }
-
-            if (fd == 0) {
-                u32 i = 0;
-                while (i < len) {
-                    int c = kbd_buffer_pop();
-                    if (c < 0) { regs->eax = i; return; }
-                    buf[i++] = (char) c;
-                    if (c == '\n') break;
-                }
-                regs->eax = i;
             } else if (current && fd >= 3 && fd < MAX_FDS &&
-                current->fd_open[fd]) {
-                u32 n = fat32_read(&current->fds[fd], buf, len);
-            regs->eax = n;
+                current->fds[fd].used) {
+                process_fd_t* f = &current->fds[fd];
+            if (!f->wmode) { regs->eax = (u32)-1; break; }
+            if (f->wlen + len > FD_WBUF_MAX) { regs->eax = (u32)-1; break; }
+            memcpy(&f->wbuf[f->wlen], buf, len);
+            f->wlen += len;
+            regs->eax = len;
                 } else {
                     regs->eax = (u32)-1;
                 }
                 break;
         }
 
+        case SYS_READ: {
+            u32   fd  = regs->ebx;
+            char* buf = (char*) regs->ecx;
+            u32   len = regs->edx;
+            if (!buf || len == 0) { regs->eax = (u32)-1; break; }
+
+            if (fd == 0 && (!current || !current->fds[0].used)) {
+                /* stdin с клавиатуры: блокирующий. */
+                u32 i = 0;
+                while (i < len) {
+                    int c = kbd_buffer_pop();
+                    if (c < 0) {
+                        __asm__ volatile ("sti; hlt; cli");
+                        continue;
+                    }
+                    buf[i++] = (char) c;
+                    if (c == '\n') break;
+                }
+                regs->eax = i;
+            } else if (current && fd < MAX_FDS && current->fds[fd].used) {
+                u32 n = fat32_read(&current->fds[fd].file, buf, len);
+                regs->eax = n;
+            } else {
+                regs->eax = (u32)-1;
+            }
+            break;
+        }
+
         case SYS_OPEN: {
-            const char* path = (const char*) regs->ebx;
+            const char* path  = (const char*) regs->ebx;
+            int         flags = (int) regs->ecx;
             if (!path || !current) { regs->eax = (u32)-1; break; }
+
+            int wmode = (flags & (O_WRONLY | O_CREAT | O_TRUNC)) != 0;
+
+            /* O_CREAT: создать, если не существует. */
+            if ((flags & O_CREAT) && stat_type(path) == STAT_NOENT) {
+                fat32_create(path);
+            }
 
             regs->eax = (u32)-1;
             for (int i = 3; i < MAX_FDS; i++) {
-                if (!current->fd_open[i]) {
-                    if (fat32_open(path, &current->fds[i])) {
-                        current->fd_open[i] = 1;
-                        regs->eax = (u32) i;
-                    }
-                    break;
+                if (current->fds[i].used) continue;
+
+                if (fat32_open(path, &current->fds[i].file)) {
+                    current->fds[i].used  = 1;
+                    current->fds[i].wmode = (u8) wmode;
+                    current->fds[i].wlen  = 0;
+                    u32 pl = (u32) strlen(path);
+                    if (pl >= FD_PATH_MAX) pl = FD_PATH_MAX - 1;
+                    memcpy(current->fds[i].path, path, pl);
+                    current->fds[i].path[pl] = '\0';
+                    regs->eax = (u32) i;
                 }
+                break;
             }
             break;
         }
 
         case SYS_CLOSE: {
             u32 fd = regs->ebx;
-            if (current && fd >= 3 && fd < MAX_FDS && current->fd_open[fd]) {
-                fat32_close(&current->fds[fd]);
-                current->fd_open[fd] = 0;
+            if (current && fd < MAX_FDS && current->fds[fd].used) {
+                process_fd_t* f = &current->fds[fd];
+                if (f->wmode && f->wlen > 0) {
+                    fat32_write_file(f->path, f->wbuf, f->wlen);
+                }
+                fat32_close(&f->file);
+                f->used  = 0;
+                f->wmode = 0;
+                f->wlen  = 0;
                 regs->eax = 0;
             } else {
                 regs->eax = (u32)-1;
@@ -99,20 +131,27 @@ void syscall_handler(registers_t* regs) {
             break;
         }
 
-        case SYS_GETPID: {
+        case SYS_GETPID:
             regs->eax = current ? current->pid : 0;
             break;
-        }
 
-        case SYS_BRK: {
-            (void) regs->ebx;
+        case SYS_BRK:
             regs->eax = 0x08000000;
+            break;
+
+        case SYS_UPTIME:
+            regs->eax = (u32)(pit_get_ticks() * 10);   /* ms */
+            break;
+
+        case SYS_STAT: {
+            const char* path = (const char*) regs->ebx;
+            if (!path) { regs->eax = STAT_NOENT; break; }
+            regs->eax = (u32) stat_type(path);
             break;
         }
 
         default:
-            printf("[syscall] unknown nr=%u  ebx=%u ecx=%u edx=%u eip=%p\n",
-                   nr, regs->ebx, regs->ecx, regs->edx, (void*) regs->eip);
+            printf("[syscall] unknown nr=%u\n", nr);
             regs->eax = (u32)-1;
             break;
     }

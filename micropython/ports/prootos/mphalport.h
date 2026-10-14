@@ -12,10 +12,12 @@ mp_uint_t mp_hal_ticks_ms(void);
 mp_uint_t mp_hal_ticks_us(void);
 void mp_hal_delay_us(mp_uint_t us);
 
-/* Наши сисколы — нужны в main.c для mp_lexer_new_from_file. */
-int sys_open(const char* path, int flags);
-int sys_close(int fd);
-int sys_read(int fd, void* buf, unsigned int len);
-int sys_write(int fd, const void* buf, unsigned int len);
+/* Наши сисколы. */
+int  sys_open(const char* path, int flags);
+int  sys_close(int fd);
+int  sys_read(int fd, void* buf, unsigned int len);
+int  sys_write(int fd, const void* buf, unsigned int len);
+int  sys_stat(const char* path);
+int  sys_uptime(void);
 
 #endif

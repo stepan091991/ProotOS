@@ -11,9 +11,9 @@ size_t strlen(const char *s);
 #define SYS_READ    2
 #define SYS_OPEN    3
 #define SYS_CLOSE   4
+#define SYS_UPTIME  8
+#define SYS_STAT    9
 
-/* Сырой syscall через int 0x80.
- * Регистры фиксируем constraint'ами — GCC сам разложит по eax/ebx/ecx/edx. */
 int sys3(int nr, int a, int b, int c) {
     int ret;
     __asm__ volatile (
@@ -28,25 +28,27 @@ int sys3(int nr, int a, int b, int c) {
 int sys_write(int fd, const void* buf, unsigned int len) {
     return sys3(SYS_WRITE, fd, (int)(size_t) buf, (int) len);
 }
-
 int sys_read(int fd, void* buf, unsigned int len) {
     return sys3(SYS_READ, fd, (int)(size_t) buf, (int) len);
 }
-
 int sys_open(const char* path, int flags) {
     return sys3(SYS_OPEN, (int)(size_t) path, flags, 0);
 }
-
 int sys_close(int fd) {
     return sys3(SYS_CLOSE, fd, 0, 0);
 }
-
+int sys_stat(const char* path) {
+    return sys3(SYS_STAT, (int)(size_t) path, 0, 0);
+}
+int sys_uptime(void) {
+    return sys3(SYS_UPTIME, 0, 0, 0);
+}
 void sys_exit(int code) {
     sys3(SYS_EXIT, code, 0, 0);
     for (;;) { }
 }
 
-/* ─── HAL MicroPython ────────────────────────────── */
+/* ─── HAL ────────────────────────────────────────── */
 
 int mp_hal_stdin_rx_chr(void) {
     unsigned char c = 0;
@@ -68,7 +70,7 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
     mp_hal_stdout_tx_strn(str, len);
 }
 
-mp_uint_t mp_hal_ticks_ms(void)  { return 0; }
-mp_uint_t mp_hal_ticks_us(void)  { return 0; }
+mp_uint_t mp_hal_ticks_ms(void) { return (mp_uint_t) sys_uptime(); }
+mp_uint_t mp_hal_ticks_us(void) { return (mp_uint_t) sys_uptime() * 1000; }
 void      mp_hal_delay_us(mp_uint_t us) { (void)us; }
 void      mp_hal_set_interrupt_char(char c) { (void)c; }

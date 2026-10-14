@@ -46,6 +46,20 @@ static process_t* alloc_slot(void) {
     return NULL;
 }
 
+/* Закрыть все fd (кроме 0/1/2). */
+static void close_all_fds(process_t* p) {
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (!p->fds[i].used) continue;
+        if (p->fds[i].wmode && p->fds[i].wlen > 0) {
+            fat32_write_file(p->fds[i].path, p->fds[i].wbuf, p->fds[i].wlen);
+        }
+        fat32_close(&p->fds[i].file);
+        p->fds[i].used  = 0;
+        p->fds[i].wmode = 0;
+        p->fds[i].wlen  = 0;
+    }
+}
+
 /* ─── Kernel thread ──────────────────────────────── */
 
 u32 process_create(const char* name, void (*fn)(void*), void* arg) {
@@ -65,33 +79,20 @@ u32 process_create(const char* name, void (*fn)(void*), void* arg) {
     p->is_user    = 0;
 
     u32* sp = (u32*) p->kstack_top;
-
     *--sp = (u32) fn;
     *--sp = (u32) arg;
     *--sp = (u32) thread_entry;
-
-    *--sp = 0;   /* edi */
-    *--sp = 0;   /* esi */
-    *--sp = 0;   /* ebp */
-    *--sp = 0;   /* esp_dummy */
-    *--sp = 0;   /* ebx */
-    *--sp = 0;   /* edx */
-    *--sp = 0;   /* ecx */
-    *--sp = 0;   /* eax */
-
-    *--sp = 0x10;   /* gs */
-    *--sp = 0x10;   /* fs */
-    *--sp = 0x10;   /* es */
-    *--sp = 0x10;   /* ds */
+    *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
+    *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
+    *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x10;
 
     p->esp = (u32) sp;
-
     printf("[proc] created '%s' pid=%u esp=0x%08x (kernel)\n",
            p->name, p->pid, p->esp);
     return p->pid;
 }
 
-/* ─── Построение argc/argv на user-стеке ─────────── */
+/* ─── user-stack с argc/argv ─────────────────────── */
 
 static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                             int argc, char** argv) {
@@ -109,27 +110,20 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
         memcpy((void*) pp, argv[i], len);
         argv_user[i] = vp;
     }
-
     while (pp & 3) { pp--; vp--; }
-
-    pp -= 4; vp -= 4;
-    *(u32*) pp = 0;
-
+    pp -= 4; vp -= 4; *(u32*) pp = 0;
     for (i = argc - 1; i >= 0; i--) {
-        pp -= 4; vp -= 4;
-        *(u32*) pp = argv_user[i];
+        pp -= 4; vp -= 4; *(u32*) pp = argv_user[i];
     }
-
-    pp -= 4; vp -= 4;
-    *(u32*) pp = (u32) argc;
-
+    pp -= 4; vp -= 4; *(u32*) pp = (u32) argc;
     return vp;
                             }
 
                             /* ─── User-процесс ───────────────────────────────── */
 
                             u32 process_create_user(const char* name, const char* path,
-                                                    int argc, char** argv) {
+                                                    int argc, char** argv,
+                                                    const char* stdin_path) {
                                 process_t* p = alloc_slot();
                                 if (!p) { printf("[proc] no free slot\n"); return 0; }
 
@@ -162,10 +156,7 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                 vmm_switch_address_space(old_cr3);
 
                                 u8* kstack = (u8*) kmalloc(KERNEL_STACK_SIZE);
-                                if (!kstack) {
-                                    printf("[proc] OOM kstack\n");
-                                    return 0;
-                                }
+                                if (!kstack) { printf("[proc] OOM kstack\n"); return 0; }
 
                                 memset(p, 0, sizeof(*p));
                                 p->pid        = next_pid++;
@@ -178,29 +169,26 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                 p->user_stack = user_esp;
                                 p->is_user    = 1;
 
+                                /* fd 0 = redirect, если задан. */
+                                if (stdin_path) {
+                                    if (fat32_open(stdin_path, &p->fds[0].file)) {
+                                        p->fds[0].used = 1;
+                                        strncpy(p->fds[0].path, stdin_path, FD_PATH_MAX - 1);
+                                    } else {
+                                        printf("[proc] cannot open stdin: %s\n", stdin_path);
+                                    }
+                                }
+
                                 u32* sp = (u32*) p->kstack_top;
-
-                                *--sp = 0x23;                   /* ss_user */
-                                *--sp = p->user_stack;          /* user_esp */
-                                *--sp = 0x202;                  /* eflags */
-                                *--sp = 0x1B;                   /* cs_user */
-                                *--sp = p->user_entry;          /* user_eip */
-
-                                *--sp = (u32) user_entry;       /* eip для ret в switch_to */
-
-                                *--sp = 0;   /* edi */
-                                *--sp = 0;   /* esi */
-                                *--sp = 0;   /* ebp */
-                                *--sp = 0;   /* esp_dummy */
-                                *--sp = 0;   /* ebx */
-                                *--sp = 0;   /* edx */
-                                *--sp = 0;   /* ecx */
-                                *--sp = 0;   /* eax */
-
-                                *--sp = 0x10;   /* gs */
-                                *--sp = 0x10;   /* fs */
-                                *--sp = 0x10;   /* es */
-                                *--sp = 0x10;   /* ds */
+                                *--sp = 0x23;
+                                *--sp = p->user_stack;
+                                *--sp = 0x202;
+                                *--sp = 0x1B;
+                                *--sp = p->user_entry;
+                                *--sp = (u32) user_entry;
+                                *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
+                                *--sp = 0;  *--sp = 0;  *--sp = 0;  *--sp = 0;
+                                *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x10;
 
                                 p->esp = (u32) sp;
 
@@ -227,7 +215,6 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
 
                                                     void scheduler_tick(void) {
                                                         u64 now = pit_get_ticks();
-
                                                         for (int i = 0; i < MAX_PROCESSES; i++) {
                                                             if (processes[i].state == PROC_SLEEPING &&
                                                                 processes[i].wake_tick <= now) {
@@ -235,7 +222,6 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                                             processes[i].wake_tick = 0;
                                                                 }
                                                         }
-
                                                         if (!current) return;
                                                         if (quantum_left > 0) { quantum_left--; return; }
                                                         quantum_left = SCHED_QUANTUM;
@@ -244,18 +230,11 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
 
                                                     void schedule(void) {
                                                         __asm__ volatile ("cli");
-
                                                         process_t* next = pick_next();
-                                                        if (!next) {
-                                                            __asm__ volatile ("sti");
-                                                            return;
-                                                        }
-
+                                                        if (!next) { __asm__ volatile ("sti"); return; }
                                                         next->state = PROC_RUNNING;
                                                         if (current && current->state == PROC_RUNNING) current->state = PROC_READY;
-
                                                         tss_set_kernel_stack(next->kstack_top);
-
                                                         switch_to(next);
                                                         __asm__ volatile ("sti");
                                                     }
@@ -273,49 +252,28 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                                         process_t* self = current;
                                                         if (!self) return;
                                                         if (ms == 0) { yield(); return; }
-
                                                         u64 ticks_needed = (ms + 9) / 10;
                                                         if (ticks_needed == 0) ticks_needed = 1;
-
                                                         self->wake_tick = (u32)(pit_get_ticks() + ticks_needed);
                                                         self->state     = PROC_SLEEPING;
-
                                                         schedule();
                                                     }
 
                                                     int process_wait(u32 pid) {
-                                                        if (pid == 0) {
-                                                            printf("wait: usage: wait <pid>\n");
-                                                            return -1;
-                                                        }
-
+                                                        if (pid == 0) { printf("wait: usage\n"); return -1; }
                                                         while (1) {
                                                             process_t* p = process_find(pid);
                                                             if (!p) return -1;
-
-                                                            if (p == current) {
-                                                                printf("wait: cannot wait for self\n");
-                                                                return -1;
-                                                            }
+                                                            if (p == current) { printf("wait: cannot wait for self\n"); return -1; }
 
                                                             if (p->state == PROC_ZOMBIE) {
-                                                                /* Закрыть оставшиеся fd. */
-                                                                for (int i = 3; i < MAX_FDS; i++) {
-                                                                    if (p->fd_open[i]) {
-                                                                        fat32_close(&p->fds[i]);
-                                                                        p->fd_open[i] = 0;
-                                                                    }
-                                                                }
-                                                                if (p->kstack) {
-                                                                    kfree((void*) p->kstack);
-                                                                    p->kstack = 0;
-                                                                }
+                                                                close_all_fds(p);
+                                                                if (p->kstack) { kfree((void*) p->kstack); p->kstack = 0; }
                                                                 p->state = PROC_UNUSED;
                                                                 p->pid   = 0;
                                                                 p->name[0] = '\0';
                                                                 return 0;
                                                             }
-
                                                             process_sleep(10);
                                                         }
                                                     }
@@ -324,28 +282,18 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                                         process_t* p = process_find(pid);
                                                         if (!p) return -1;
                                                         if (p->state == PROC_ZOMBIE || p->state == PROC_UNUSED) return -1;
-
                                                         p->state = PROC_ZOMBIE;
-
                                                         if (p == current) {
-                                                            for (;;) {
-                                                                schedule();
-                                                                __asm__ volatile ("hlt");
-                                                            }
+                                                            for (;;) { schedule(); __asm__ volatile ("hlt"); }
                                                         }
                                                         return 0;
                                                     }
 
                                                     void process_exit(void) {
                                                         if (!current) panic("process_exit without current");
-
                                                         printf("[proc] pid=%u '%s' exiting\n", current->pid, current->name);
                                                         current->state = PROC_ZOMBIE;
-
-                                                        for (;;) {
-                                                            schedule();
-                                                            __asm__ volatile ("hlt");
-                                                        }
+                                                        for (;;) { schedule(); __asm__ volatile ("hlt"); }
                                                     }
 
                                                     void process_dump(void) {
@@ -358,7 +306,6 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                                                 case PROC_READY:    st = "READY";    break;
                                                                 case PROC_SLEEPING: st = "SLEEPING"; break;
                                                                 case PROC_ZOMBIE:   st = "ZOMBIE";   break;
-                                                                default: break;
                                                             }
                                                             printf("       %-4u %-9s %s%s\n",
                                                                    processes[i].pid, st, processes[i].name,

@@ -616,30 +616,42 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
 
                          static void cmd_exec(const char* args) {
                              if (*args == '\0') {
-                                 printf("usage: exec <path-to-elf> [args...]\n");
+                                 printf("usage: exec <path-to-elf> [args...] [< FILE]\n");
                                  return;
                              }
 
-                             /* Копируем строку в локальный буфер, чтобы можно было резать. */
                              static char argbuf[256];
                              u32 len = (u32) strlen(args);
                              if (len >= sizeof(argbuf)) len = sizeof(argbuf) - 1;
                              for (u32 i = 0; i < len; i++) argbuf[i] = args[i];
                              argbuf[len] = '\0';
 
-                             /* Разбиваем по пробелам/табам. argv[0] — имя файла. */
                              char* argv[16];
-                             int argc = 0;
+                             int   argc = 0;
+                             char* stdin_path = NULL;
+
                              char* p = argbuf;
-                             while (*p && argc < 16) {
+                             while (*p) {
                                  while (*p == ' ' || *p == '\t') p++;
                                  if (!*p) break;
-                                 argv[argc++] = p;
+
+                                 if (*p == '<') {
+                                     p++;
+                                     while (*p == ' ' || *p == '\t') p++;
+                                     if (!*p) break;
+                                     stdin_path = p;
+                                     while (*p && *p != ' ' && *p != '\t') p++;
+                                     if (*p) *p++ = '\0';
+                                     continue;
+                                 }
+
+                                 if (argc < 16) argv[argc++] = p;
                                  while (*p && *p != ' ' && *p != '\t') p++;
                                  if (*p) *p++ = '\0';
                              }
+
                              if (argc == 0) {
-                                 printf("usage: exec <path-to-elf> [args...]\n");
+                                 printf("exec: missing file\n");
                                  return;
                              }
 
@@ -647,11 +659,9 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                              const char* fp = resolve_path(argv[0], fullpath);
 
                              const char* slash = fp;
-                             for (const char* q = fp; *q; q++) {
-                                 if (*q == '/') slash = q + 1;
-                             }
+                             for (const char* q = fp; *q; q++) if (*q == '/') slash = q + 1;
 
-                             u32 pid = process_create_user(slash, fp, argc, argv);
+                             u32 pid = process_create_user(slash, fp, argc, argv, stdin_path);
                              if (pid == 0) {
                                  printf("exec: failed to load %s\n", fp);
                              } else {

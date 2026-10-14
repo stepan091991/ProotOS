@@ -30,7 +30,7 @@ ISO_IMAGE  = $(BUILD_DIR)/$(NAME).iso
 # ─── Образы ──────────────────────────────────────────
 INITRD_IMG   = $(BUILD_DIR)/data.img
 INITRD_SIZE  = 64
-INITRD_SRC   = $(wildcard initrd_files/*)
+INITRD_SRC   = $(shell find initrd_files 2>/dev/null)
 
 DISK_IMG     = $(BUILD_DIR)/disk.img
 DISK_SIZE    = 128
@@ -68,10 +68,22 @@ $(INITRD_IMG): $(INITRD_SRC)
 	dd if=/dev/zero of=$(INITRD_IMG) bs=1M count=$(INITRD_SIZE) 2>/dev/null
 	mkfs.fat -F 32 -s 1 -n PROOTOS $(INITRD_IMG) >/dev/null 2>&1
 	@if [ -d initrd_files ]; then \
-	    for f in initrd_files/*; do \
-	        [ -f "$$f" ] || continue; \
-	        name=$$(basename "$$f" | tr a-z A-Z); \
-	        mcopy -o -i $(INITRD_IMG) "$$f" "::$$name"; \
+	    find initrd_files -mindepth 1 -type d \
+	        | awk -F/ '{print NF-1, $$0}' | sort -n | cut -d' ' -f2- \
+	        | while read d; do \
+	            U=$$(echo "$${d#initrd_files/}" | tr a-z A-Z); \
+	            mmd -i $(INITRD_IMG) "::/$$U" 2>/dev/null || true; \
+	        done; \
+	    find initrd_files -type f | while read f; do \
+	        rel=$${f#initrd_files/}; \
+	        dir=$$(dirname "$$rel"); \
+	        base=$$(basename "$$rel"); \
+	        if [ "$$dir" = "." ]; then \
+	            tgt=$$(echo "$$base" | tr a-z A-Z); \
+	        else \
+	            tgt=$$(echo "$$dir" | tr a-z A-Z)/$$(echo "$$base" | tr a-z A-Z); \
+	        fi; \
+	        mcopy -o -i $(INITRD_IMG) "$$f" "::/$$tgt"; \
 	    done; \
 	fi
 
@@ -81,14 +93,26 @@ $(DISK_IMG): $(INITRD_SRC) $(USER_PROG)
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE) 2>/dev/null
 	mkfs.fat -F 32 -s 1 -n PROOTOS $(DISK_IMG) >/dev/null 2>&1
 	@if [ -d initrd_files ]; then \
-	    for f in initrd_files/*; do \
-	        [ -f "$$f" ] || continue; \
-	        name=$$(basename "$$f" | tr a-z A-Z); \
-	        mcopy -o -i $(DISK_IMG) "$$f" "::$$name"; \
+	    find initrd_files -mindepth 1 -type d \
+	        | awk -F/ '{print NF-1, $$0}' | sort -n | cut -d' ' -f2- \
+	        | while read d; do \
+	            U=$$(echo "$${d#initrd_files/}" | tr a-z A-Z); \
+	            mmd -i $(DISK_IMG) "::/$$U" 2>/dev/null || true; \
+	        done; \
+	    find initrd_files -type f | while read f; do \
+	        rel=$${f#initrd_files/}; \
+	        dir=$$(dirname "$$rel"); \
+	        base=$$(basename "$$rel"); \
+	        if [ "$$dir" = "." ]; then \
+	            tgt=$$(echo "$$base" | tr a-z A-Z); \
+	        else \
+	            tgt=$$(echo "$$dir" | tr a-z A-Z)/$$(echo "$$base" | tr a-z A-Z); \
+	        fi; \
+	        mcopy -o -i $(DISK_IMG) "$$f" "::/$$tgt"; \
 	    done; \
 	fi
 	@if [ -f $(USER_PROG) ]; then \
-	    mcopy -o -i $(DISK_IMG) $(USER_PROG) ::HELLO.ELF; \
+	    mcopy -o -i $(DISK_IMG) $(USER_PROG) ::/HELLO.ELF; \
 	    echo "[disk] HELLO.ELF installed"; \
 	fi
 
@@ -98,10 +122,22 @@ $(USB_IMG):
 	dd if=/dev/zero of=$(USB_IMG) bs=1M count=$(USB_SIZE) 2>/dev/null
 	mkfs.fat -F 32 -s 1 -n USBFLASH $(USB_IMG) >/dev/null 2>&1
 	@if [ -d initrd_files ]; then \
-	    for f in initrd_files/*; do \
-	        [ -f "$$f" ] || continue; \
-	        name=$$(basename "$$f" | tr a-z A-Z); \
-	        mcopy -o -i $(USB_IMG) "$$f" "::$$name"; \
+	    find initrd_files -mindepth 1 -type d \
+	        | awk -F/ '{print NF-1, $$0}' | sort -n | cut -d' ' -f2- \
+	        | while read d; do \
+	            U=$$(echo "$${d#initrd_files/}" | tr a-z A-Z); \
+	            mmd -i $(USB_IMG) "::/$$U" 2>/dev/null || true; \
+	        done; \
+	    find initrd_files -type f | while read f; do \
+	        rel=$${f#initrd_files/}; \
+	        dir=$$(dirname "$$rel"); \
+	        base=$$(basename "$$rel"); \
+	        if [ "$$dir" = "." ]; then \
+	            tgt=$$(echo "$$base" | tr a-z A-Z); \
+	        else \
+	            tgt=$$(echo "$$dir" | tr a-z A-Z)/$$(echo "$$base" | tr a-z A-Z); \
+	        fi; \
+	        mcopy -o -i $(USB_IMG) "$$f" "::/$$tgt"; \
 	    done; \
 	fi
 	@echo "[usb] $(USB_IMG) built ($(USB_SIZE) MB)"
