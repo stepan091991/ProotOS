@@ -10,14 +10,17 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len);
 void mp_hal_set_interrupt_char(char c);
 mp_uint_t mp_hal_ticks_ms(void);
 mp_uint_t mp_hal_ticks_us(void);
+mp_uint_t mp_hal_ticks_cpu(void);
 void mp_hal_delay_us(mp_uint_t us);
+void mp_hal_delay_ms(mp_uint_t ms);
 
-/* Наши сисколы. */
+/* Сисколы. */
 int  sys_open(const char* path, int flags);
 int  sys_close(int fd);
 int  sys_read(int fd, void* buf, unsigned int len);
 int  sys_write(int fd, const void* buf, unsigned int len);
 int  sys_stat(const char* path);
 int  sys_uptime(void);
+int  sys_sleep(int ms);
 
 #endif

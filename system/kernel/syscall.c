@@ -61,7 +61,6 @@ void syscall_handler(registers_t* regs) {
             if (!buf || len == 0) { regs->eax = (u32)-1; break; }
 
             if (fd == 0 && (!current || !current->fds[0].used)) {
-                /* stdin с клавиатуры: блокирующий. */
                 u32 i = 0;
                 while (i < len) {
                     int c = kbd_buffer_pop();
@@ -89,7 +88,6 @@ void syscall_handler(registers_t* regs) {
 
             int wmode = (flags & (O_WRONLY | O_CREAT | O_TRUNC)) != 0;
 
-            /* O_CREAT: создать, если не существует. */
             if ((flags & O_CREAT) && stat_type(path) == STAT_NOENT) {
                 fat32_create(path);
             }
@@ -140,13 +138,20 @@ void syscall_handler(registers_t* regs) {
             break;
 
         case SYS_UPTIME:
-            regs->eax = (u32)(pit_get_ticks() * 10);   /* ms */
+            regs->eax = (u32)(pit_get_ticks() * 10);
             break;
 
         case SYS_STAT: {
             const char* path = (const char*) regs->ebx;
             if (!path) { regs->eax = STAT_NOENT; break; }
             regs->eax = (u32) stat_type(path);
+            break;
+        }
+
+        case SYS_SLEEP: {
+            u32 ms = regs->ebx;
+            if (ms > 0) process_sleep(ms);
+            regs->eax = 0;
             break;
         }
 

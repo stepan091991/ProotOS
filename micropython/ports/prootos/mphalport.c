@@ -3,6 +3,7 @@
 #include "py/mpconfig.h"
 #include "py/mphal.h"
 #include <stddef.h>
+#include <stdint.h>
 
 size_t strlen(const char *s);
 
@@ -13,6 +14,7 @@ size_t strlen(const char *s);
 #define SYS_CLOSE   4
 #define SYS_UPTIME  8
 #define SYS_STAT    9
+#define SYS_SLEEP   10
 
 int sys3(int nr, int a, int b, int c) {
     int ret;
@@ -43,6 +45,9 @@ int sys_stat(const char* path) {
 int sys_uptime(void) {
     return sys3(SYS_UPTIME, 0, 0, 0);
 }
+int sys_sleep(int ms) {
+    return sys3(SYS_SLEEP, ms, 0, 0);
+}
 void sys_exit(int code) {
     sys3(SYS_EXIT, code, 0, 0);
     for (;;) { }
@@ -72,5 +77,23 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
 
 mp_uint_t mp_hal_ticks_ms(void) { return (mp_uint_t) sys_uptime(); }
 mp_uint_t mp_hal_ticks_us(void) { return (mp_uint_t) sys_uptime() * 1000; }
-void      mp_hal_delay_us(mp_uint_t us) { (void)us; }
-void      mp_hal_set_interrupt_char(char c) { (void)c; }
+
+/* rdtsc — счётчик тактов CPU для time.ticks_cpu(). */
+mp_uint_t mp_hal_ticks_cpu(void) {
+    uint32_t lo;
+    __asm__ volatile ("rdtsc" : "=a"(lo) : : "edx");
+    return (mp_uint_t) lo;
+}
+
+void mp_hal_delay_us(mp_uint_t us) {
+    if (us == 0) return;
+    int ms = (int)((us + 999) / 1000);
+    if (ms == 0) ms = 1;
+    sys_sleep(ms);
+}
+
+void mp_hal_delay_ms(mp_uint_t ms) {
+    if (ms > 0) sys_sleep((int) ms);
+}
+
+void mp_hal_set_interrupt_char(char c) { (void)c; }

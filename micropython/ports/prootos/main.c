@@ -163,3 +163,16 @@ mp_import_stat_t mp_import_stat(const char *path) {
     if (t == 1) return MP_IMPORT_STAT_FILE;
     return MP_IMPORT_STAT_NO_EXIST;
 }
+
+/* ─── Заглушка open() ───────────────────────────────
+ * VFS/file objects у нас нет — работает только int fd через
+ * sys_open(). Чтобы modio/modbuiltins слинковались, определяем
+ * символ mp_builtin_open_obj и сразу кидаем ошибку при вызове. */
+mp_obj_t mp_builtin_open_stub(size_t n_args, const mp_obj_t *args,
+                              mp_map_t *kwargs) {
+    (void)n_args; (void)args; (void)kwargs;
+    mp_raise_msg(&mp_type_OSError,
+                 MP_ERROR_TEXT("open() not supported; use int fd interface"));
+    return mp_const_none;
+                              }
+                              MP_DEFINE_CONST_FUN_OBJ_KW(mp_builtin_open_obj, 1, mp_builtin_open_stub);

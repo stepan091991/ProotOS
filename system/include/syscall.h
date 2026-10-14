@@ -14,6 +14,7 @@
 #define SYS_BRK     7
 #define SYS_UPTIME  8
 #define SYS_STAT    9
+#define SYS_SLEEP   10
 
 /* flags для SYS_OPEN */
 #define O_RDONLY    0x0
