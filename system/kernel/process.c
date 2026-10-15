@@ -14,7 +14,7 @@ extern void thread_entry(void);
 extern void user_entry(void);
 
 static process_t processes[MAX_PROCESSES];
-static u32       next_pid     = 1;
+u32              next_pid     = 1;
 static u32       quantum_left = SCHED_QUANTUM;
 
 process_t* current = NULL;
@@ -225,11 +225,7 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                 *--sp = 0;   /* ecx */
                                 *--sp = 0;   /* eax */
 
-                                /* ── Сегменты user-mode: DPL=3, RPL=3 = 0x23. ──
-                                 * В ring 3 ds/es/fs/gs ДОЛЖНЫ указывать на user-data сегмент
-                                 * (индекс 4 в GDT, селектор 4<<3 | RPL(3) = 0x23).
-                                 * Kernel data (0x10) имеет DPL=0, из CPL=3 обращение через него
-                                 * даст #GP(0). QEMU это часто прощает, реальный Intel — нет. */
+                                /* Сегменты user-mode: DPL=3, RPL=3 = 0x23. */
                                 *--sp = 0x23;   /* gs */
                                 *--sp = 0x23;   /* fs */
                                 *--sp = 0x23;   /* es */
@@ -241,8 +237,6 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                        p->name, p->pid, p->esp, p->user_entry);
                                 return p->pid;
                                                     }
-
-                                                    /* ─── Планировщик ────────────────────────────────── */
 
                                                     static process_t* pick_next(void) {
                                                         int start = 0;
@@ -357,3 +351,6 @@ static u32 build_user_stack(u32 ustack_virt, u32 ustack_phys,
                                                                    processes[i].is_user ? "  [user]" : "");
                                                         }
                                                     }
+
+                                                    /* Геттер для диагностики. */
+                                                    u32 _debug_next_pid(void) { return next_pid; }

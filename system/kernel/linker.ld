@@ -10,6 +10,14 @@ SECTIONS
         *(.text)
     }
 
+    /* CherryUSB: авто-регистрация классов (HID, MSC) */
+    .usbh_class_info : ALIGN(4) {
+        __usbh_class_info_start__ = .;
+        KEEP(*(SORT_BY_NAME(".usbh_class_info*")))
+        KEEP(*(.usbh_class_info))
+        __usbh_class_info_end__ = .;
+    }
+
     .rodata ALIGN(4K) : {
         *(.rodata)
     }

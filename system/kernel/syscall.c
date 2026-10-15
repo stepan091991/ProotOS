@@ -8,6 +8,7 @@
 #include "process.h"
 #include "fat32.h"
 #include "pit.h"
+#include "string.h"
 
 static int stat_type(const char* path) {
     if (fat32_is_dir(path)) return STAT_DIR;
@@ -61,11 +62,19 @@ void syscall_handler(registers_t* regs) {
             if (!buf || len == 0) { regs->eax = (u32)-1; break; }
 
             if (fd == 0 && (!current || !current->fds[0].used)) {
+                // stdin с клавиатуры.
+                //
+                // ИЗМЕНЕНО: раньше было `sti; hlt; cli` — процессор
+                // просыпался на IRQ, но не отдавал управление другим
+                // нитям, и они висели. Теперь process_sleep(1) —
+                // планировщик переключается на 10 мс, за это время
+                // успевают отработать usb_hid, usb_poll, hub и т.д.,
+                // а заодно появляются символы в kbd_buffer.
                 u32 i = 0;
                 while (i < len) {
                     int c = kbd_buffer_pop();
                     if (c < 0) {
-                        __asm__ volatile ("sti; hlt; cli");
+                        process_sleep(1);
                         continue;
                     }
                     buf[i++] = (char) c;

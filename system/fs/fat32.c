@@ -300,9 +300,7 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                       if (e[0] == 0x00) { goto done; }
                                       if (e[0] == 0xE5) { lfn_count = 0; continue; }
 
-                                      /* ── ФИКС: LFN-проверка ДО label.
-                                       * У LFN attr = 0x0F, и 0x0F & 0x08 = 0x08 — если проверить
-                                       * label первым, LFN-записи будут отброшены как метки. */
+                                      /* LFN-проверка ДО label: у LFN attr = 0x0F, 0x0F & 0x08 = 0x08 */
                                       if ((e[11] & FAT32_ATTR_LFN) == FAT32_ATTR_LFN) {
                                           if (lfn_count < LFN_MAX_ENTRIES) {
                                               memcpy(lfn_frags[lfn_count], e, 32);
@@ -314,7 +312,6 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                       if (e[11] & FAT32_ATTR_LABEL) { lfn_count = 0; continue; }
                                       if (is_dot_entry(e)) { lfn_count = 0; continue; }
 
-                                      /* Имя: LFN, если checksum совпадает. */
                                       char name[FAT32_MAX_NAME];
                                       int have_lfn = 0;
                                       if (lfn_count > 0 && lfn_frags[0][13] == lfn_checksum(e)) {
@@ -425,10 +422,8 @@ static void lfn_split(const char* long_name, u8 entries[][32],
 
                                                                         /* ── Не нашли — расширяем каталог новым кластером. ── */
 
-                                                                        /* Сколько записей вмещает один кластер. */
                                                                         int per_cluster = (int)(fs.cluster_size / 32);
                                                                         if (needed > per_cluster) {
-                                                                            /* Много LFN-фрагментов (>16) — пока не поддерживаем разрыв. */
                                                                             printf("[fat32] need %d entries, cluster holds %d\n",
                                                                                    needed, per_cluster);
                                                                             pmm_free_page(cbuf);
@@ -441,7 +436,6 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                                                             return 0;
                                                                         }
 
-                                                                        /* Найти последний кластер цепочки. */
                                                                         u32 last = dir_cluster;
                                                                         while (last >= 2 && last < FAT32_EOC_MIN) {
                                                                             u32 n = next_cluster(last);
@@ -449,7 +443,6 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                                                             last = n;
                                                                         }
 
-                                                                        /* Прилинковать новый кластер к последнему. */
                                                                         if (!fat_set(last, new_c)) {
                                                                             free_chain(new_c);
                                                                             pmm_free_page(cbuf);
@@ -457,10 +450,8 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                                                         }
                                                                         fat_set(new_c, 0x0FFFFFFF);
 
-                                                                        /* Занулить его. */
                                                                         memset(cbuf, 0, fs.cluster_size);
                                                                         if (!write_cluster(new_c, cbuf)) {
-                                                                            /* Откатывать сложно — оставим как есть, просто вернём ошибку. */
                                                                             pmm_free_page(cbuf);
                                                                             return 0;
                                                                         }
@@ -981,7 +972,6 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                                                                                                                                          entry[0] = 0xE5;
                                                                                                                                                          if (!update_dir_entry(lba, offset, entry)) return 0;
 
-                                                                                                                                                         /* Помечаем предшествующие LFN-записи как удалённые. */
                                                                                                                                                          u32 cur_lba = lba, cur_off = offset;
                                                                                                                                                          while (cur_off >= 32) {
                                                                                                                                                              cur_off -= 32;
@@ -1082,10 +1072,15 @@ static void lfn_split(const char* long_name, u8 entries[][32],
                                                                                                                                                                 (fs.total_sectors * fs.bytes_per_sector) / (1024 * 1024));
                                                                                                                                                      }
 
+                                                                                                                                                     /* ИЗМЕНЕНИЕ: entries[32] → entries[8].
+                                                                                                                                                      * sizeof(fat32_dirent_t) = 268 байт, 32 × 268 = 8576 байт на стеке
+                                                                                                                                                      * + рекурсия до 4 уровней + subpath[512] = переполнение KERNEL_STACK_SIZE=4096.
+                                                                                                                                                      * После переполнения стек затирал .data (в т.ч. next_pid в process.c),
+                                                                                                                                                      * и pid'ы становились мусорными (72908800 = heap_end). */
                                                                                                                                                      static void test_walk(const char* prefix, u32 depth) {
                                                                                                                                                          if (depth > 4) return;
-                                                                                                                                                         fat32_dirent_t entries[32];
-                                                                                                                                                         int n = fat32_list(prefix, entries, 32);
+                                                                                                                                                         fat32_dirent_t entries[8];
+                                                                                                                                                         int n = fat32_list(prefix, entries, 8);
                                                                                                                                                          if (n <= 0) return;
                                                                                                                                                          for (int i = 0; i < n; i++) {
                                                                                                                                                              for (u32 j = 0; j < depth; j++) printf("  ");

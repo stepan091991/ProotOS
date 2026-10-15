@@ -293,6 +293,26 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                      continue;
                                  }
 
+                                 /* Ctrl+C: сбросить текущую строку. */
+                                 if (c == 0x03) {
+                                     vga_set_cursor(start_row, start_col);
+                                     for (u32 i = 0; i <= len; i++) vga_putchar(' ');
+                                     vga_set_cursor(start_row, start_col);
+                                     len = 0; pos = 0; out[0] = '\0';
+                                     printf("^C\n");
+                                     out[0] = '\0';
+                                     return 0;
+                                 }
+
+                                 /* Ctrl+D на пустой строке — вернуть пустую строку. */
+                                 if (c == 0x04) {
+                                     if (len == 0) {
+                                         out[0] = '\0';
+                                         return 0;
+                                     }
+                                     continue;
+                                 }
+
                                  if (c >= 0x80) continue;
                                  if ((c < 0x20) && (c != '\t')) continue;
 
@@ -339,6 +359,7 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                              printf("  paging              - paging state (CR0/CR3/CR2)\n");
                              printf("  ata                 - dump ATA status and read MBR\n");
                              printf("  bdev                - list block devices\n");
+                             printf("  mount [DEV]         - switch active FAT32 volume\n");
                              printf("  fat32               - walk the filesystem\n");
                              printf("  ls [DIR]            - list files\n");
                              printf("  cd [DIR]            - change directory\n");
@@ -356,7 +377,7 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                              printf("  kill PID            - kill process by pid\n");
                              printf("  wait PID            - wait for process to finish\n");
                              printf("\n  <cmd>               - if not builtin, run /BIN/<CMD>[.ELF]\n");
-                             printf("\nLine editing: arrows, Home, End, Backspace, Delete\n");
+                             printf("\nLine editing: arrows, Home, End, Backspace, Delete, Ctrl+C\n");
                              printf("History: Up/Down arrows. Pager: q quits, any key next page\n");
                              pager_end();
                          }
@@ -568,15 +589,48 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                              if (matched == 0) printf("(no matches)\n");
                          }
 
-                         /* ─── Команды процессов ───────────────────────────── */
+                         /* ─── mount ────────────────────────────────────────── */
 
-                         extern volatile u32 g_work1_count;
-                         extern volatile u32 g_work2_count;
+                         static void cmd_mount(const char* args) {
+                             if (*args == '\0') {
+                                 printf("usage: mount <devname>\n");
+                                 printf("  available: ");
+                                 int n = bdev_count();
+                                 for (int i = 0; i < n; i++) {
+                                     block_device_t* d = bdev_get_by_index(i);
+                                     if (d) printf("%s ", d->name);
+                                 }
+                                 printf("\n");
+                                 return;
+                             }
+
+                             char name[BDEV_NAME_LEN];
+                             u32 i = 0;
+                             while (*args && *args != ' ' && i < BDEV_NAME_LEN - 1) {
+                                 name[i++] = *args++;
+                             }
+                             name[i] = '\0';
+
+                             block_device_t* dev = bdev_get(name);
+                             if (!dev) {
+                                 printf("mount: no such device: %s\n", name);
+                                 return;
+                             }
+                             if (!fat32_mount(dev)) {
+                                 printf("mount: failed to mount %s\n", name);
+                                 return;
+                             }
+
+                             current_dir[0] = '/';
+                             current_dir[1] = '\0';
+
+                             printf("mounted %s as /\n", name);
+                         }
+
+                         /* ─── Команды процессов ───────────────────────────── */
 
                          static void cmd_ps(void) {
                              process_dump();
-                             printf("[work] work1=%u work2=%u\n",
-                                    g_work1_count, g_work2_count);
                          }
 
                          static void cmd_sleep(const char* args) {
@@ -615,8 +669,6 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
 
                          /* ─── exec ─────────────────────────────────────────── */
 
-                         /* Разбор строки args на argv с учётом "< FILE" для stdin redirect.
-                          * Модифицирует буфер argbuf. Возвращает argc, argv, stdin_path. */
                          static int parse_argv(char* argbuf, char** argv, int argv_max,
                                                const char** stdin_out) {
                              int argc = 0;
@@ -681,11 +733,8 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                    }
                                                }
 
-                                               /* ─── Fallback: запуск программ из /BIN ──────────── */
+                                               /* ─── Fallback: запуск программ из /BIN ───────────── */
 
-                                               /* Ищет CMD в /BIN/, игнорируя регистр и расширение.
-                                                * Сравнивает базовое имя файла (до точки) с CMD.
-                                                * Возвращает 1 и полный путь, если нашли. */
                                                static int try_resolve(const char* cmd, char* out, u32 outsz) {
                                                    fat32_dirent_t entries[64];
                                                    int n = fat32_list("/BIN", entries, 64);
@@ -697,7 +746,6 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
 
                                                        const char* name = entries[i].name;
 
-                                                       /* Отсекаем расширение: берём всё до первой точки. */
                                                        char base[FAT32_MAX_NAME];
                                                        u32 bl = 0;
                                                        for (u32 k = 0; name[k] && name[k] != '.' && bl < FAT32_MAX_NAME - 1; k++) {
@@ -705,7 +753,6 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                        }
                                                        base[bl] = '\0';
 
-                                                       /* Регистронезависимое сравнение с cmd. */
                                                        u32 ci = 0;
                                                        int match = 1;
                                                        for (;;) {
@@ -716,12 +763,11 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
 
                                                            if (a != b) { match = 0; break; }
-                                                           if (a == '\0') break;   /* оба закончились одновременно */
-                                                               ci++;
+                                                           if (a == '\0') break;
+                                                           ci++;
                                                        }
                                                        if (!match) continue;
 
-                                                       /* Собираем "/BIN/" + name */
                                                        u32 w = 0;
                                                        const char* prefix = "/BIN/";
                                                        while (prefix[w] && w + 1 < outsz) { out[w] = prefix[w]; w++; }
@@ -741,7 +787,6 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                        return;
                                                    }
 
-                                                   /* Собираем argbuf: "cmd args..." */
                                                    static char argbuf[256];
                                                    u32 a = 0;
                                                    u32 cl = (u32) strlen(cmd);
@@ -814,6 +859,8 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                        ata_test();
                                                    } else if (strcmp(cmd, "bdev") == 0) {
                                                        bdev_dump();
+                                                   } else if (strcmp(cmd, "mount") == 0) {
+                                                       cmd_mount(args);
                                                    } else if (strcmp(cmd, "fat32") == 0) {
                                                        pager_begin();
                                                        fat32_test();
@@ -852,7 +899,6 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                    } else if (strcmp(cmd, "wait") == 0) {
                                                        cmd_wait(args);
                                                    } else {
-                                                       /* Fallback: пробуем найти CMD в /BIN/ и запустить. */
                                                        run_bin(cmd, args);
                                                    }
                                                }
@@ -863,6 +909,8 @@ static void redraw_input(const char* buf, u32 len, u32 pos,
                                                    for (;;) {
                                                        printf("%s%s ", PROMPT, current_dir);
                                                        read_line(line, LINE_MAX);
-                                                       execute(line);
+                                                       if (line[0] != '\0') {
+                                                           execute(line);
+                                                       }
                                                    }
                                                }

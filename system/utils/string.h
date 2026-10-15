@@ -17,4 +17,9 @@ void*  memchr(const void* ptr, int c, size_t n);
 
 void   strrev(char* str);
 
+char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+long  strtol(const char *s, char **endptr, int base);
+int snprintf(char *buf, size_t size, const char *fmt, ...);
+
 #endif
