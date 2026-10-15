@@ -2,7 +2,6 @@
 
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
-/* Отключаем persistent code, чтобы не компилировать persistentcode.c */
 #define MICROPY_PERSISTENT_CODE_SAVE (0)
 #define MICROPY_PERSISTENT_CODE_LOAD (0)
 
@@ -20,12 +19,10 @@
 #define MICROPY_PY_SYS_ARGV               (1)
 #define MICROPY_PY_SYS_PATH               (1)
 
-/* ─── Нужно для modjson, moductypes, modbinascii ─── */
-#define MICROPY_PY_IO                     (1)   /* objstringio */
-#define MICROPY_PY_BUILTINS_BYTEARRAY     (1)   /* objarray */
+#define MICROPY_PY_IO                     (1)
+#define MICROPY_PY_BUILTINS_BYTEARRAY     (1)
 #define MICROPY_PY_BUILTINS_MEMORYVIEW    (1)
 
-/* ─── extmod: безопасный набор ─── */
 #define MICROPY_PY_BINASCII               (1)
 #define MICROPY_PY_HEAPQ                  (1)
 #define MICROPY_PY_JSON                   (1)
@@ -35,14 +32,26 @@
 #define MICROPY_PY_RANDOM                 (1)
 #define MICROPY_PY_RANDOM_EXTRA_FUNCS     (1)
 
-/* marshal отключён: требует persistentcode (mp_raw_code_load_mem и др.) */
-#define MICROPY_PY_MARSHAL                (0)
+/* ─── hashlib: только SHA256 ─── */
+#define MICROPY_PY_HASHLIB                (1)
+#define MICROPY_PY_HASHLIB_MD5            (0)
+#define MICROPY_PY_HASHLIB_SHA1           (0)
+#define MICROPY_PY_HASHLIB_SHA256         (1)
+
+/* ─── re ─── */
+#define MICROPY_PY_RE                     (1)
+
+/* ─── deflate ─── */
+#define MICROPY_PY_DEFLATE                (1)
+#define MICROPY_PY_DEFLATE_COMPRESS       (0)
 
 /* ─── time ─── */
 #define MICROPY_PY_TIME                   (1)
 #define MICROPY_PY_TIME_MS                (1)
 #define MICROPY_PY_TIME_UPTIME_MS         (1)
 #define MICROPY_PY_TIME_TICKS             (1)
+
+#define MICROPY_PY_MARSHAL                (0)
 
 typedef long mp_off_t;
 

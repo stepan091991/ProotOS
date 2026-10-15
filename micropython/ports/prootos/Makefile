@@ -11,6 +11,7 @@ CFLAGS = -m32 -ffreestanding -nostdlib \
          -fno-common -O2 -Wall -Wno-error \
          -Wpointer-arith -std=gnu99 -DNDEBUG \
          -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+         -include prootos_compat.h \
          -I. -I$(TOP) -I$(BUILD)
 
 LDFLAGS = -m elf_i386 -T linker.ld
@@ -21,13 +22,20 @@ vpath %.c $(TOP)/extmod $(TOP)/shared/runtime
 
 SRC_EXTMOD = \
 	$(TOP)/extmod/modbinascii.c \
+	$(TOP)/extmod/modhashlib.c \
 	$(TOP)/extmod/modheapq.c \
 	$(TOP)/extmod/modjson.c \
+	$(TOP)/extmod/modre.c \
 	$(TOP)/extmod/moductypes.c \
+	$(TOP)/extmod/moddeflate.c \
 	$(TOP)/extmod/modframebuf.c \
 	$(TOP)/extmod/modplatform.c \
 	$(TOP)/extmod/modrandom.c \
 	$(TOP)/extmod/modtime.c
+
+# Пусто: modhashlib.c и modre.c сами #include'ят lib-исходники.
+# moddeflate.c тоже self-contained (включает uzlib внутрь).
+SRC_LIBX =
 
 SRC_SHARED = \
 	$(TOP)/shared/runtime/pyexec.c
@@ -36,8 +44,10 @@ SRC_C = \
 	main.c \
 	mphalport.c \
 	libc_shim.c \
+	modos.c \
 	$(SRC_SHARED) \
 	$(SRC_EXTMOD) \
+	$(SRC_LIBX) \
 	$(SRC_PY_CORE) \
 	$(SRC_PY_GC) \
 	$(SRC_PY_FORMAT) \

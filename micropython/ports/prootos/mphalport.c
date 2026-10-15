@@ -15,6 +15,10 @@ size_t strlen(const char *s);
 #define SYS_UPTIME  8
 #define SYS_STAT    9
 #define SYS_SLEEP   10
+#define SYS_READDIR 11
+#define SYS_UNLINK  12
+#define SYS_MKDIR   13
+#define SYS_RMDIR   14
 
 int sys3(int nr, int a, int b, int c) {
     int ret;
@@ -48,6 +52,18 @@ int sys_uptime(void) {
 int sys_sleep(int ms) {
     return sys3(SYS_SLEEP, ms, 0, 0);
 }
+int sys_readdir(const char* path, char* buf, unsigned int bufsize) {
+    return sys3(SYS_READDIR, (int)(size_t) path, (int)(size_t) buf, (int) bufsize);
+}
+int sys_unlink(const char* path) {
+    return sys3(SYS_UNLINK, (int)(size_t) path, 0, 0);
+}
+int sys_mkdir(const char* path) {
+    return sys3(SYS_MKDIR, (int)(size_t) path, 0, 0);
+}
+int sys_rmdir(const char* path) {
+    return sys3(SYS_RMDIR, (int)(size_t) path, 0, 0);
+}
 void sys_exit(int code) {
     sys3(SYS_EXIT, code, 0, 0);
     for (;;) { }
@@ -78,7 +94,6 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
 mp_uint_t mp_hal_ticks_ms(void) { return (mp_uint_t) sys_uptime(); }
 mp_uint_t mp_hal_ticks_us(void) { return (mp_uint_t) sys_uptime() * 1000; }
 
-/* rdtsc — счётчик тактов CPU для time.ticks_cpu(). */
 mp_uint_t mp_hal_ticks_cpu(void) {
     uint32_t lo;
     __asm__ volatile ("rdtsc" : "=a"(lo) : : "edx");

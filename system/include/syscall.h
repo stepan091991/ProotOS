@@ -15,6 +15,10 @@
 #define SYS_UPTIME  8
 #define SYS_STAT    9
 #define SYS_SLEEP   10
+#define SYS_READDIR 11
+#define SYS_UNLINK  12
+#define SYS_MKDIR   13
+#define SYS_RMDIR   14
 
 /* flags для SYS_OPEN */
 #define O_RDONLY    0x0

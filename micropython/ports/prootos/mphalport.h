@@ -23,4 +23,9 @@ int  sys_stat(const char* path);
 int  sys_uptime(void);
 int  sys_sleep(int ms);
 
+int  sys_readdir(const char* path, char* buf, unsigned int bufsize);
+int  sys_unlink(const char* path);
+int  sys_mkdir(const char* path);
+int  sys_rmdir(const char* path);
+
 #endif

@@ -155,6 +155,51 @@ void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_READDIR: {
+            const char* path = (const char*) regs->ebx;
+            char*       buf  = (char*) regs->ecx;
+            u32         bsz  = regs->edx;
+            if (!path || !buf || bsz == 0) { regs->eax = (u32)-1; break; }
+
+            static fat32_dirent_t entries[64];
+            int n = fat32_list(path, entries, 64);
+            if (n < 0) { regs->eax = (u32)-1; break; }
+
+            u32 off = 0;
+            int count = 0;
+            for (int i = 0; i < n; i++) {
+                u32 nl = (u32) strlen(entries[i].name);
+                if (off + nl + 1 >= bsz) break;
+                memcpy(buf + off, entries[i].name, nl);
+                off += nl;
+                buf[off++] = 0;
+                count++;
+            }
+            regs->eax = (u32) count;
+            break;
+        }
+
+        case SYS_UNLINK: {
+            const char* path = (const char*) regs->ebx;
+            if (!path || !fat32_delete(path)) { regs->eax = (u32)-1; break; }
+            regs->eax = 0;
+            break;
+        }
+
+        case SYS_MKDIR: {
+            const char* path = (const char*) regs->ebx;
+            if (!path || !fat32_mkdir(path)) { regs->eax = (u32)-1; break; }
+            regs->eax = 0;
+            break;
+        }
+
+        case SYS_RMDIR: {
+            const char* path = (const char*) regs->ebx;
+            if (!path || !fat32_delete(path)) { regs->eax = (u32)-1; break; }
+            regs->eax = 0;
+            break;
+        }
+
         default:
             printf("[syscall] unknown nr=%u\n", nr);
             regs->eax = (u32)-1;
